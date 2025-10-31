@@ -1,0 +1,45 @@
+[package]
+name = "catalyst"
+version = "0.1.0"
+edition = "2021"
+authors = ["Catalyst Contributors"]
+description = "High-performance Claude Code hooks for skill auto-activation"
+license = "MIT"
+repository = "https://github.com/yourusername/catalyst"
+
+# Core binaries (always available)
+[[bin]]
+name = "skill-activation-prompt"
+path = "src/bin/skill_activation_prompt.rs"
+
+[[bin]]
+name = "file-analyzer"
+path = "src/bin/file_analyzer.rs"
+
+# SQLite-backed binaries (require 'sqlite' feature)
+[[bin]]
+name = "post-tool-use-tracker-sqlite"
+path = "src/bin/post_tool_use_tracker_sqlite.rs"
+required-features = ["sqlite"]
+
+[features]
+default = []
+sqlite = ["dep:rusqlite", "dep:chrono", "dep:anyhow"]
+
+[dependencies]
+# Core dependencies (always required)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+walkdir = "2.4"
+
+# SQLite feature dependencies
+rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+chrono = { version = "0.4", optional = true }
+anyhow = { version = "1.0", optional = true }
+
+[profile.release]
+opt-level = 3        # Maximum optimization
+lto = true           # Link-time optimization
+codegen-units = 1    # Better optimization (slower compile)
+strip = true         # Remove debug symbols

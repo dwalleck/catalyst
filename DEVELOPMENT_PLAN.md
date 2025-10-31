@@ -1,0 +1,2478 @@
+# Catalyst Development Plan
+
+**Status:** In Progress
+**Last Updated:** 2025-10-31
+**Goal:** Achieve Rust best practices compliance and production-ready code quality
+
+---
+
+## Executive Summary
+
+This plan addresses code quality improvements identified during the Rust best practices review based on [GitHub's Rust coding standards](https://github.com/github/awesome-copilot/blob/main/instructions/rust.instructions.md).
+
+**Current Score:** 🟡 19/40 (47%)
+**Target Score:** ✅ 35+/40 (87%+)
+
+---
+
+## Phase 1: Critical Issues 🔴
+
+**Goal:** Fix issues that prevent clean compilation and introduce security risks
+**Priority:** HIGH
+**Timeline:** Complete before any releases
+
+### 1.1 Fix Compiler Warnings
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 30 minutes
+
+**Tasks:**
+- [ ] Remove unused import `Read` from `file_analyzer.rs:4`
+- [ ] Remove unused import `Serialize` from `skill_activation_prompt.rs:1`
+- [ ] Remove unused import `std::path::Path` from `post_tool_use_tracker_sqlite.rs:9`
+- [ ] Add `#[allow(dead_code)]` to structs with fields used only for JSON deserialization
+  - [ ] `HookInput` in `skill_activation_prompt.rs`
+  - [ ] `SkillRule` fields in `skill_activation_prompt.rs`
+  - [ ] `SkillRules.version` in `skill_activation_prompt.rs`
+  - [ ] `MatchedSkill.match_type` in `skill_activation_prompt.rs`
+  - [ ] `FileAnalysis.line_count` in `file_analyzer.rs`
+- [ ] Prefix unused parameter with underscore: `_tool` in `post_tool_use_tracker_sqlite.rs:243`
+
+**Verification:**
+```bash
+cargo clippy --all-features -- -D warnings
+# Should pass with 0 errors
+```
+
+**Files to Modify:**
+- `src/bin/skill_activation_prompt.rs`
+- `src/bin/file_analyzer.rs`
+- `src/bin/post_tool_use_tracker_sqlite.rs`
+
+---
+
+### 1.2 Fix SQL Injection Risk
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 45 minutes
+
+**Issue:** Dynamic SQL construction using string interpolation in `post_tool_use_tracker_sqlite.rs:156-162`
+
+**Current Code:**
+```rust
+&format!(
+    "UPDATE sessions
+     SET last_activity = ?1,
+         total_files = total_files + 1,
+         {category_col} = {category_col} + 1  // ⚠️ Risk
+     WHERE session_id = ?2"
+)
+```
+
+**Tasks:**
+- [ ] Replace `format!()` with explicit match on `category`
+- [ ] Use const SQL strings for each category variant
+- [ ] Add comment explaining why this approach is safe
+- [ ] Verify all SQL uses parameterized queries
+
+**Solution Pattern:**
+```rust
+let sql = match category {
+    "backend" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, backend_files = backend_files + 1 WHERE session_id = ?2",
+    "frontend" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, frontend_files = frontend_files + 1 WHERE session_id = ?2",
+    "database" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, database_files = database_files + 1 WHERE session_id = ?2",
+    _ => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1 WHERE session_id = ?2",
+};
+
+self.conn.execute(sql, params![&now, session_id])?;
+```
+
+**Verification:**
+- [ ] Manual code review - no string interpolation in SQL
+- [ ] Test with various category values
+- [ ] Run with `DEBUG_HOOKS=1` to verify behavior
+
+**Files to Modify:**
+- `src/bin/post_tool_use_tracker_sqlite.rs`
+
+---
+
+### 1.3 Optimize Regex Compilation
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 1 hour
+
+**Issue:** Regexes compiled on every function call (performance penalty)
+
+**Tasks:**
+- [ ] Add `once_cell` to dependencies in `Cargo.toml`
+- [ ] Create lazy static regexes in `file_analyzer.rs`
+- [ ] Create lazy static regexes in `post_tool_use_tracker_sqlite.rs`
+- [ ] Update `analyze_file()` functions to use static regexes
+- [ ] Benchmark before/after (optional but recommended)
+
+**Implementation:**
+```rust
+use once_cell::sync::Lazy;
+
+static TRY_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"try\s*\{|try:|except:")
+        .expect("Failed to compile try regex")
+});
+
+static ASYNC_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"async\s+|async def|async fn|Task<")
+        .expect("Failed to compile async regex")
+});
+// ... etc for all regexes
+```
+
+**Verification:**
+```bash
+# Benchmark (optional)
+hyperfine './target/release/file-analyzer test-data/'
+
+# Should see same output, faster execution
+```
+
+**Files to Modify:**
+- `Cargo.toml` - add `once_cell = "1.19"`
+- `src/bin/file_analyzer.rs`
+- `src/bin/post_tool_use_tracker_sqlite.rs`
+
+---
+
+## Phase 2: Important Improvements 🟠
+
+**Goal:** Add essential documentation and testing
+**Priority:** MEDIUM
+**Timeline:** Complete before 1.0 release
+
+### 2.1 Add Rustdoc Documentation
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 2-3 hours
+
+**Tasks:**
+- [ ] Document `main()` function in `skill_activation_prompt.rs`
+  - [ ] Purpose
+  - [ ] Input format (JSON schema)
+  - [ ] Output format
+  - [ ] Error conditions
+  - [ ] Example usage
+- [ ] Document `main()` function in `file_analyzer.rs`
+  - [ ] Purpose
+  - [ ] Command-line arguments
+  - [ ] Output format
+  - [ ] Example usage
+- [ ] Document `main()` function in `post_tool_use_tracker_sqlite.rs`
+  - [ ] Purpose
+  - [ ] Input format
+  - [ ] Side effects (database writes)
+  - [ ] Error handling
+- [ ] Document all public helper functions
+  - [ ] `get_file_category()`
+  - [ ] `should_analyze()`
+  - [ ] `analyze_file()`
+- [ ] Document all structs with examples
+
+**Documentation Template:**
+```rust
+/// Analyzes user prompts and suggests relevant Claude Code skills.
+///
+/// Reads JSON input from stdin containing user prompt and context,
+/// matches against skill rules, and outputs formatted suggestions.
+///
+/// # Input Format
+///
+/// ```json
+/// {
+///   "session_id": "abc123",
+///   "prompt": "create a backend API",
+///   "cwd": "/project",
+///   "permission_mode": "normal"
+/// }
+/// ```
+///
+/// # Output Format
+///
+/// Prints formatted skill suggestions to stdout grouped by priority.
+///
+/// # Errors
+///
+/// Returns `io::Error` if:
+/// - stdin cannot be read
+/// - JSON parsing fails
+/// - skill-rules.json cannot be found or parsed
+///
+/// # Example
+///
+/// ```no_run
+/// use std::process::{Command, Stdio};
+///
+/// let output = Command::new("skill-activation-prompt")
+///     .stdin(Stdio::piped())
+///     .output()?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+fn main() -> io::Result<()> {
+```
+
+**Verification:**
+```bash
+cargo doc --all-features --no-deps --open
+# Should see well-formatted documentation
+```
+
+**Files to Modify:**
+- All files in `src/bin/`
+
+---
+
+### 2.2 Add Unit Tests
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 3-4 hours
+
+**Tasks:**
+
+#### `skill_activation_prompt.rs` Tests
+- [ ] Test keyword matching (case-insensitive)
+- [ ] Test intent pattern matching (regex)
+- [ ] Test priority grouping (critical/high/medium/low)
+- [ ] Test empty matches (no output)
+- [ ] Test malformed JSON input (error handling)
+
+#### `file_analyzer.rs` Tests
+- [ ] Test `get_file_category()` with various paths
+  - [ ] Frontend paths
+  - [ ] Backend paths
+  - [ ] Database paths
+  - [ ] Other paths
+- [ ] Test `should_analyze()` filters
+  - [ ] Valid extensions (.ts, .tsx, .js, etc.)
+  - [ ] Test files (should skip)
+  - [ ] Config files (should skip)
+- [ ] Test regex pattern matching
+  - [ ] Async detection
+  - [ ] Try/catch detection
+  - [ ] Prisma detection
+  - [ ] Controller detection
+  - [ ] API call detection
+
+#### `post_tool_use_tracker_sqlite.rs` Tests
+- [ ] Test database creation
+- [ ] Test file modification tracking
+- [ ] Test session summary updates
+- [ ] Test category counting (backend/frontend/database)
+- [ ] Test file analysis integration
+- [ ] Test concurrent access (if applicable)
+
+**Test Structure:**
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_file_category_detection() {
+        assert_eq!(get_file_category("/frontend/App.tsx"), "frontend");
+        assert_eq!(get_file_category("/src/controllers/UserController.ts"), "backend");
+        assert_eq!(get_file_category("/database/schema.sql"), "database");
+        assert_eq!(get_file_category("/src/utils.ts"), "other");
+    }
+
+    #[test]
+    fn test_should_analyze_filters() {
+        assert!(should_analyze("/src/app.ts"));
+        assert!(should_analyze("/components/Button.tsx"));
+        assert!(!should_analyze("/src/app.test.ts"));
+        assert!(!should_analyze("/config.json"));
+        assert!(!should_analyze("/README.md"));
+    }
+
+    #[test]
+    fn test_async_detection() {
+        use once_cell::sync::Lazy;
+
+        static ASYNC_REGEX: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"async\s+").unwrap()
+        });
+
+        let content = "async function fetchData() { return data; }";
+        assert!(ASYNC_REGEX.is_match(content));
+
+        let sync_content = "function getData() { return data; }";
+        assert!(!ASYNC_REGEX.is_match(sync_content));
+    }
+}
+```
+
+**Verification:**
+```bash
+cargo test --all-features
+# All tests should pass
+
+cargo test --all-features -- --nocapture
+# See test output
+```
+
+**Files to Modify:**
+- All files in `src/bin/` (add test modules)
+
+---
+
+### 2.3 Implement Common Traits
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 1 hour
+
+**Tasks:**
+- [ ] Add `Clone` to deserializable structs
+- [ ] Add `PartialEq` where equality makes sense
+- [ ] Add `Eq` + `Hash` for types used in collections
+- [ ] Consider `Default` for initialization patterns
+
+**Implementation:**
+```rust
+// Before
+#[derive(Debug, Deserialize)]
+struct HookInput { ... }
+
+// After
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[allow(dead_code)]  // JSON deserialization
+struct HookInput { ... }
+
+// For comparable types
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MatchedSkill {
+    name: String,
+    priority: String,
+}
+```
+
+**Checklist:**
+- [ ] `HookInput` - Add `Clone`, `PartialEq`
+- [ ] `PromptTriggers` - Add `Clone`, `PartialEq`
+- [ ] `SkillRule` - Add `Clone`, `PartialEq`
+- [ ] `SkillRules` - Add `Clone`, `PartialEq`
+- [ ] `MatchedSkill` - Add `Clone`, `PartialEq`, `Eq`, `Hash`
+- [ ] `FileAnalysis` - Add `Clone`, `PartialEq`
+- [ ] `Stats` - Add `Clone`, `PartialEq`
+
+**Verification:**
+```bash
+cargo check --all-features
+# Should compile without issues
+```
+
+**Files to Modify:**
+- All files in `src/bin/`
+
+---
+
+### 2.4 Improve CLI with Modern Crates
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 3-4 hours
+
+**Issue:** Currently using manual argument parsing and basic error handling. Modern CLI crates would improve UX significantly.
+
+**Current Problems:**
+- Manual `env::args()` parsing in `file-analyzer.rs`
+- No automatic `--help` generation
+- Manual DEBUG_HOOKS env var checking
+- Converting `serde_json::Error` to `io::Error` manually
+- Basic println! without colors or structure
+
+**Recommended Crates:**
+
+#### Must-Have: `clap` (argument parsing)
+**Why:** Better than manual `env::args()` parsing
+
+**Benefits:**
+- ✅ Automatic `--help` and `--version`
+- ✅ Type-safe argument parsing
+- ✅ Built-in validation
+- ✅ Shell completion generation
+
+#### Must-Have: `anyhow` (error handling)
+**Why:** Already using in SQLite, should use everywhere
+
+**Benefits:**
+- ✅ `.context()` for helpful error messages
+- ✅ No manual error type conversion
+- ✅ Stack traces in debug mode
+
+#### Recommended: `tracing` (structured logging)
+**Why:** Better than manual `DEBUG_HOOKS` checking
+
+**Benefits:**
+- ✅ Structured logging (not just strings)
+- ✅ Log levels (debug, info, warn, error)
+- ✅ Controlled by `RUST_LOG=debug` env var
+- ✅ Can output JSON for parsing
+
+#### Nice-to-Have: `colored` (terminal colors)
+**Why:** Visual hierarchy improves readability
+
+**Benefits:**
+- ✅ Better visual output
+- ✅ Respects `NO_COLOR` env var
+- ✅ Cross-platform (Windows/Unix)
+
+#### Nice-to-Have: `indicatif` (progress bars)
+**Why:** Feedback for long operations
+
+**Benefits:**
+- ✅ Shows progress during large scans
+- ✅ Automatically hides when piped
+- ✅ Estimated time remaining
+
+**Tasks:**
+
+#### Add Dependencies
+- [ ] Add `clap = { version = "4.5", features = ["derive"] }` to Cargo.toml
+- [ ] Add `anyhow = "1.0"` to core dependencies (not just SQLite feature)
+- [ ] Add `tracing = "0.1"` to dependencies
+- [ ] Add `tracing-subscriber = { version = "0.3", features = ["env-filter"] }` to dependencies
+- [ ] Add `colored = "2.1"` to dependencies
+- [ ] Add `indicatif = { version = "0.17", optional = true }` with feature flag
+
+#### Update `file-analyzer.rs`
+- [ ] Replace manual args parsing with `clap::Parser` derive
+- [ ] Add `--verbose`, `--format`, `--no-color` flags
+- [ ] Change `main()` return type to `anyhow::Result<()>`
+- [ ] Add `.context()` to all error handling
+- [ ] Replace `println!` with `colored` output
+- [ ] Initialize tracing subscriber
+- [ ] Replace manual prints with `info!`, `warn!`, `debug!` macros
+- [ ] Add optional progress bar for large directories
+
+#### Update `skill-activation-prompt.rs`
+- [ ] Change return type from `io::Result<()>` to `anyhow::Result<()>`
+- [ ] Add `.context()` for JSON parsing errors
+- [ ] Add `.context()` for file reading errors
+- [ ] Add colored output for different priority levels
+- [ ] Add tracing for debugging
+
+#### Update `post-tool-use-tracker-sqlite.rs`
+- [ ] Already using `anyhow::Result` ✅
+- [ ] Replace manual `DEBUG_HOOKS` check with `tracing::debug!`
+- [ ] Add structured logging with fields
+
+**Implementation Examples:**
+
+```rust
+// file-analyzer.rs with clap
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(name = "file-analyzer")]
+#[command(about = "Analyzes files for error-prone patterns", long_about = None)]
+struct Args {
+    /// Directory to analyze
+    directory: PathBuf,
+
+    /// Show detailed output
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text", value_parser = ["text", "json"])]
+    format: String,
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
+        .init();
+
+    info!("Analyzing directory: {:?}", args.directory);
+    // ...
+}
+```
+
+```rust
+// With anyhow context
+use anyhow::{Context, Result};
+
+fn main() -> Result<()> {
+    let data: HookInput = serde_json::from_str(&input)
+        .context("Failed to parse hook input JSON")?;
+
+    let rules_content = fs::read_to_string(&rules_path)
+        .context(format!("Failed to read skill rules from {}", rules_path))?;
+
+    let rules: SkillRules = serde_json::from_str(&rules_content)
+        .context("Failed to parse skill rules JSON")?;
+}
+```
+
+```rust
+// With colored output
+use colored::*;
+
+println!("{}", "⚠️ CRITICAL SKILLS (REQUIRED):".red().bold());
+for skill in critical {
+    println!("  → {}", skill.name.yellow());
+}
+```
+
+```rust
+// With tracing instead of manual DEBUG_HOOKS
+use tracing::{debug, info, warn};
+
+// Replace this:
+if std::env::var("DEBUG_HOOKS").is_ok() {
+    eprintln!("[Rust/SQLite] Tracked: {file_path}");
+}
+
+// With this:
+debug!(file_path = %file_path, category = %category, "Tracked file modification");
+
+// Usage:
+// RUST_LOG=debug ./post-tool-use-tracker-sqlite
+```
+
+**Updated Cargo.toml:**
+```toml
+[dependencies]
+# Core dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+walkdir = "2.4"
+once_cell = "1.19"  # From Phase 1
+
+# CLI improvements (Phase 2.4)
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"  # Use everywhere, not just SQLite
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "2.1"
+
+# Optional: Progress bars
+indicatif = { version = "0.17", optional = true }
+
+# SQLite feature dependencies
+rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+chrono = { version = "0.4", optional = true }
+
+[features]
+default = []
+sqlite = ["dep:rusqlite", "dep:chrono"]
+progress = ["dep:indicatif"]  # Optional feature for progress bars
+```
+
+**Verification:**
+```bash
+# Test new CLI arguments
+./target/release/file-analyzer --help
+# Should show auto-generated help
+
+./target/release/file-analyzer /path --verbose
+# Should show detailed output
+
+./target/release/file-analyzer /path --format json
+# Should output JSON
+
+# Test tracing
+RUST_LOG=debug ./target/release/skill-activation-prompt < input.json
+# Should show debug logs
+
+# Test colored output
+./target/release/file-analyzer /path
+# Should show colored output
+
+NO_COLOR=1 ./target/release/file-analyzer /path
+# Should show plain output
+```
+
+**Files to Modify:**
+- `Cargo.toml` - Add new dependencies
+- `src/bin/skill_activation_prompt.rs` - Add tracing, anyhow, colored
+- `src/bin/file_analyzer.rs` - Add clap, tracing, anyhow, colored
+- `src/bin/post_tool_use_tracker_sqlite.rs` - Replace DEBUG_HOOKS with tracing
+
+**Example Output (Before vs After):**
+
+Before:
+```
+Usage: file-analyzer <directory>
+
+Analyzes files in directory for error-prone patterns
+```
+
+After:
+```
+$ file-analyzer --help
+Analyzes files for error-prone patterns
+
+Usage: file-analyzer [OPTIONS] <DIRECTORY>
+
+Arguments:
+  <DIRECTORY>  Directory to analyze
+
+Options:
+  -v, --verbose          Show detailed output
+  -f, --format <FORMAT>  Output format (text, json) [default: text]
+      --no-color         Suppress colored output
+  -h, --help             Print help
+  -V, --version          Print version
+```
+
+**Benefits:**
+- ✅ Professional CLI interface
+- ✅ Better error messages with context
+- ✅ Structured logging that can be disabled
+- ✅ Colored output that respects NO_COLOR
+- ✅ JSON output for machine parsing
+- ✅ Progress feedback for large operations
+- ✅ Automatic --help generation
+
+**Priority:** MEDIUM-HIGH - Significantly improves usability
+
+---
+
+### 2.5 Optimize String/Path/Pattern Operations
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 2-3 hours
+
+**Issue:** Current code does inefficient string operations, allocations, and path handling.
+
+**Current Problems:**
+
+#### 1. Excessive `to_lowercase()` Allocations
+```rust
+// file_analyzer.rs:43
+let path_lower = path.to_lowercase();  // Allocates new String
+
+// skill_activation_prompt.rs:55,73
+let prompt = data.prompt.to_lowercase();  // Allocates
+let keyword_match = triggers.keywords.iter()
+    .any(|kw| prompt.contains(&kw.to_lowercase()));  // Allocates for each keyword!
+```
+
+**Problem:** Each `to_lowercase()` allocates a new String. For 100 keywords, that's 100+ allocations.
+
+#### 2. String-based Path Operations
+```rust
+// Using string contains instead of Path methods
+if path.contains("/frontend/")
+    || path.contains("/client/")
+    || path.contains("/src/components/") { ... }
+
+if path_lower.ends_with(".ts")
+    || path_lower.ends_with(".tsx") { ... }
+```
+
+**Problem:** String operations don't handle path separators correctly across platforms (Windows uses `\`, Unix uses `/`).
+
+#### 3. Multiple Pattern Checks (Linear Search)
+```rust
+// Checking 6 extensions one by one
+path_lower.ends_with(".ts")
+    || path_lower.ends_with(".tsx")
+    || path_lower.ends_with(".js")
+    || path_lower.ends_with(".jsx")
+    || path_lower.ends_with(".rs")
+    || path_lower.ends_with(".cs")
+```
+
+**Problem:** O(n) linear search, could use a set for O(1) lookup.
+
+#### 4. No .gitignore Support
+```rust
+for entry in WalkDir::new(dir) { ... }
+```
+
+**Problem:** Scans `node_modules/`, `.git/`, `target/`, etc. unnecessarily.
+
+#### 5. No Parallel Processing
+Large directory scans are sequential, even though each file analysis is independent.
+
+---
+
+**Recommended Crates:**
+
+#### Must-Have: `ignore` crate
+**Why:** Respects .gitignore, .ignore files (used by ripgrep)
+
+**Benefits:**
+- ✅ Skips node_modules, .git, target automatically
+- ✅ 10-100x faster for large repos
+- ✅ Respects .gitignore patterns
+- ✅ Cross-platform path handling
+
+**Before:**
+```rust
+for entry in WalkDir::new(dir) { ... }
+// Scans everything including node_modules/
+```
+
+**After:**
+```rust
+use ignore::WalkBuilder;
+
+for entry in WalkBuilder::new(dir).build() { ... }
+// Automatically skips ignored files
+```
+
+#### Must-Have: `globset` crate
+**Why:** Efficient file extension matching
+
+**Benefits:**
+- ✅ Compile patterns once
+- ✅ Match multiple patterns efficiently
+- ✅ Cross-platform glob support
+
+**Before:**
+```rust
+path_lower.ends_with(".ts")
+    || path_lower.ends_with(".tsx")
+    || path_lower.ends_with(".js")
+    // ... 6 checks
+```
+
+**After:**
+```rust
+use globset::{Glob, GlobSetBuilder};
+
+// Compile once
+static CODE_EXTENSIONS: Lazy<GlobSet> = Lazy::new(|| {
+    GlobSetBuilder::new()
+        .add(Glob::new("*.ts").unwrap())
+        .add(Glob::new("*.tsx").unwrap())
+        .add(Glob::new("*.js").unwrap())
+        .add(Glob::new("*.jsx").unwrap())
+        .add(Glob::new("*.rs").unwrap())
+        .add(Glob::new("*.cs").unwrap())
+        .build()
+        .unwrap()
+});
+
+// Use
+CODE_EXTENSIONS.is_match(path)
+```
+
+#### Recommended: `unicase` crate
+**Why:** Case-insensitive comparison without allocation
+
+**Benefits:**
+- ✅ No `to_lowercase()` allocations
+- ✅ Direct case-insensitive comparison
+- ✅ Works with HashSet/HashMap
+
+**Before:**
+```rust
+let prompt = data.prompt.to_lowercase();  // Allocates
+let keyword_match = triggers.keywords.iter()
+    .any(|kw| prompt.contains(&kw.to_lowercase()));  // Multiple allocations
+```
+
+**After:**
+```rust
+use unicase::UniCase;
+
+// No allocations
+let keyword_match = triggers.keywords.iter()
+    .any(|kw| UniCase::new(&data.prompt).contains(&UniCase::new(kw)));
+```
+
+#### Nice-to-Have: `rayon` crate
+**Why:** Parallel iteration for large directories
+
+**Benefits:**
+- ✅ Automatic parallelization
+- ✅ 2-8x faster on multi-core systems
+- ✅ Easy to use (just change `.iter()` to `.par_iter()`)
+
+**Before:**
+```rust
+for entry in WalkDir::new(dir) {
+    analyze_file(entry.path());  // Sequential
+}
+```
+
+**After:**
+```rust
+use rayon::prelude::*;
+
+entries.par_iter().for_each(|entry| {
+    analyze_file(entry.path());  // Parallel!
+});
+```
+
+#### Nice-to-Have: `aho-corasick` crate
+**Why:** Multi-pattern string matching (better than multiple contains())
+
+**Benefits:**
+- ✅ Match multiple keywords in single pass
+- ✅ Much faster than multiple `.contains()` calls
+- ✅ Used by ripgrep for speed
+
+**Before:**
+```rust
+// Checks each keyword one by one
+triggers.keywords.iter()
+    .any(|kw| prompt.contains(&kw.to_lowercase()))
+```
+
+**After:**
+```rust
+use aho_corasick::AhoCorasick;
+
+static KEYWORD_MATCHER: Lazy<AhoCorasick> = Lazy::new(|| {
+    AhoCorasick::new_auto_configured(&["backend", "api", "prisma", ...])
+});
+
+// Single pass through prompt
+KEYWORD_MATCHER.is_match(&prompt)
+```
+
+---
+
+**Tasks:**
+
+#### Add Dependencies
+- [ ] Add `ignore = "0.4"` to Cargo.toml (must-have)
+- [ ] Add `globset = "0.4"` to Cargo.toml (must-have)
+- [ ] Add `unicase = "2.7"` to Cargo.toml (recommended)
+- [ ] Add `rayon = "1.8"` to Cargo.toml (optional, feature flag)
+- [ ] Add `aho-corasick = "1.1"` to Cargo.toml (optional)
+
+#### Replace WalkDir with ignore crate
+- [ ] Replace `WalkDir::new(dir)` with `WalkBuilder::new(dir).build()`
+- [ ] Test that .gitignore is respected
+- [ ] Benchmark performance improvement
+
+#### Use globset for Extension Matching
+- [ ] Create static GlobSet for code file extensions
+- [ ] Replace multiple `ends_with()` checks with `GlobSet::is_match()`
+- [ ] Create GlobSet for test file patterns (.test., .spec.)
+
+#### Use Path Methods Instead of String Contains
+- [ ] Change `get_file_category(path: &str)` to `get_file_category(path: &Path)`
+- [ ] Replace `path.contains("/frontend/")` with `path.components()` checks
+- [ ] Use `path.extension()` instead of string `ends_with()`
+
+#### Optimize Case-Insensitive Matching
+- [ ] Replace `to_lowercase()` in keyword matching with `unicase`
+- [ ] Use `UniCase::new()` for comparisons
+- [ ] Benchmark memory reduction
+
+#### Optional: Add Parallel Processing
+- [ ] Add `rayon` feature flag to Cargo.toml
+- [ ] Change sequential iteration to `.par_iter()` in file-analyzer
+- [ ] Test performance on large directories (>1000 files)
+
+#### Optional: Multi-Pattern String Matching
+- [ ] Use `aho-corasick` for keyword matching in skill-activation-prompt
+- [ ] Compile keyword matcher once with Lazy static
+- [ ] Benchmark improvement
+
+---
+
+**Implementation Examples:**
+
+```rust
+// 1. Replace WalkDir with ignore
+use ignore::WalkBuilder;
+
+for result in WalkBuilder::new(&args.directory).build() {
+    let entry = result?;
+    if entry.file_type().is_some_and(|ft| ft.is_file()) {
+        // Process file
+    }
+}
+```
+
+```rust
+// 2. Use globset for extensions
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use once_cell::sync::Lazy;
+
+static CODE_EXTENSIONS: Lazy<GlobSet> = Lazy::new(|| {
+    let mut builder = GlobSetBuilder::new();
+    for ext in &["*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.cs"] {
+        builder.add(Glob::new(ext).unwrap());
+    }
+    builder.build().unwrap()
+});
+
+fn should_analyze(path: &Path) -> bool {
+    CODE_EXTENSIONS.is_match(path)
+}
+```
+
+```rust
+// 3. Use Path methods instead of string contains
+fn get_file_category(path: &Path) -> &'static str {
+    // Convert to str for component checking
+    let path_str = path.to_string_lossy();
+
+    // Better: use path components
+    for component in path.components() {
+        match component.as_os_str().to_str() {
+            Some("frontend") | Some("client") | Some("components") => return "frontend",
+            Some("backend") | Some("server") | Some("api") => return "backend",
+            Some("database") | Some("prisma") => return "database",
+            _ => continue,
+        }
+    }
+
+    "other"
+}
+```
+
+```rust
+// 4. Case-insensitive without allocation
+use unicase::UniCase;
+
+fn matches_keyword(prompt: &str, keywords: &[String]) -> bool {
+    let prompt_uni = UniCase::new(prompt);
+    keywords.iter()
+        .any(|kw| prompt_uni.as_ref().contains(UniCase::new(kw).as_ref()))
+}
+```
+
+```rust
+// 5. Parallel processing with rayon
+use rayon::prelude::*;
+
+let results: Vec<_> = entries
+    .par_iter()
+    .filter_map(|entry| analyze_file(entry.path()).ok())
+    .collect();
+```
+
+```rust
+// 6. Multi-pattern matching with aho-corasick
+use aho_corasick::AhoCorasick;
+
+static KEYWORD_MATCHER: Lazy<AhoCorasick> = Lazy::new(|| {
+    AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build(&["backend", "api", "controller", "service", "route"])
+        .unwrap()
+});
+
+fn has_keyword(prompt: &str) -> bool {
+    KEYWORD_MATCHER.is_match(prompt)
+}
+```
+
+---
+
+**Updated Cargo.toml:**
+```toml
+[dependencies]
+# Core dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+once_cell = "1.19"
+
+# String/Path/Pattern optimizations (Phase 2.5)
+ignore = "0.4"          # Respects .gitignore (must-have)
+globset = "0.4"         # Efficient pattern matching (must-have)
+unicase = "2.7"         # Case-insensitive without allocation (recommended)
+
+# CLI improvements
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "2.1"
+
+# Optional optimizations
+rayon = { version = "1.8", optional = true }           # Parallel processing
+aho-corasick = { version = "1.1", optional = true }    # Multi-pattern matching
+indicatif = { version = "0.17", optional = true }      # Progress bars
+
+# SQLite feature dependencies
+rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+chrono = { version = "0.4", optional = true }
+
+[features]
+default = []
+sqlite = ["dep:rusqlite", "dep:chrono"]
+parallel = ["dep:rayon"]              # Enable parallel processing
+fast-patterns = ["dep:aho-corasick"]  # Enable multi-pattern matching
+progress = ["dep:indicatif"]          # Enable progress bars
+```
+
+---
+
+**Performance Impact:**
+
+| Optimization | Before | After | Improvement |
+|--------------|--------|-------|-------------|
+| Directory scan (with node_modules) | ~2000ms | ~200ms | 10x faster |
+| Extension matching (1000 files) | ~50ms | ~5ms | 10x faster |
+| Keyword matching (100 keywords) | ~100 allocations | 0 allocations | ∞ better |
+| Case-insensitive search | Allocates | No allocation | Memory efficient |
+| Large directory (10k files) | Sequential | Parallel | 4-8x faster |
+
+---
+
+**Verification:**
+
+```bash
+# Test .gitignore support
+cd test-repo-with-node-modules
+time ./target/release/file-analyzer .
+# Should skip node_modules/, be much faster
+
+# Test pattern matching
+RUST_LOG=debug ./target/release/file-analyzer /path
+# Should show which patterns matched
+
+# Test parallel processing
+time cargo run --release --features parallel --bin file-analyzer -- /large/dir
+# Compare with non-parallel version
+
+# Memory profiling
+valgrind --tool=massif ./target/release/skill-activation-prompt < input.json
+# Should show fewer allocations
+```
+
+---
+
+**Files to Modify:**
+- `Cargo.toml` - Add new dependencies and features
+- `src/bin/file_analyzer.rs` - Replace WalkDir, use globset, Path methods
+- `src/bin/skill_activation_prompt.rs` - Use unicase, aho-corasick for keywords
+- `src/bin/post_tool_use_tracker_sqlite.rs` - Use Path methods instead of strings
+
+**Priority:** MEDIUM - Significant performance improvements, especially for large codebases
+
+---
+
+### 2.6 Typesafe Settings.json Management
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 2-3 hours
+
+**Issue:** Need to parse, create, and update `.claude/settings.json` in a typesafe way for installation and configuration management.
+
+**Current Challenges:**
+- Manual JSON manipulation is error-prone
+- No validation of hook configurations
+- Installation scripts would benefit from programmatic settings updates
+- Need to merge configurations without breaking existing settings
+
+**Settings.json Structure to Support:**
+```json
+{
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": ["mysql", "sequential-thinking"],
+  "permissions": {
+    "allow": ["Edit:*", "Write:*"],
+    "defaultMode": "acceptEdits"
+  },
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh"
+      }]
+    }],
+    "PostToolUse": [{
+      "matcher": "Edit|MultiEdit|Write",
+      "hooks": [{
+        "type": "command",
+        "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-tracker.sh"
+      }]
+    }]
+  }
+}
+```
+
+---
+
+**Recommended Approach:**
+
+Use `serde` with strongly-typed structs to ensure type safety and validation.
+
+**Tasks:**
+
+#### Create Settings Data Structures
+- [ ] Create `src/settings.rs` module (or `src/bin/settings_manager.rs` for CLI tool)
+- [ ] Define `ClaudeSettings` root struct
+- [ ] Define `Permissions` struct
+- [ ] Define `Hooks` struct with HashMap for event types
+- [ ] Define `HookConfig` struct (matcher + hooks array)
+- [ ] Define `Hook` struct (type + command)
+- [ ] Add serde derive macros with proper field renaming
+
+#### Implement Core Operations
+- [ ] Implement `ClaudeSettings::read(path)` - Load from file
+- [ ] Implement `ClaudeSettings::write(path)` - Save to file
+- [ ] Implement `ClaudeSettings::merge(other)` - Merge configurations
+- [ ] Implement validation methods
+  - [ ] Validate hook commands exist
+  - [ ] Validate matcher patterns are valid regex
+  - [ ] Validate permission patterns
+
+#### Add CLI Tool (Optional)
+- [ ] Create `settings-manager` binary
+- [ ] Add commands: `read`, `validate`, `add-hook`, `remove-hook`, `merge`
+- [ ] Add `--dry-run` flag for safety
+- [ ] Add pretty-printing with colors
+
+#### Update Installation Script
+- [ ] Use settings manager to add hooks during installation
+- [ ] Preserve existing user settings
+- [ ] Add backup before modifications
+
+---
+
+**Implementation Examples:**
+
+```rust
+// src/settings.rs or src/bin/settings_manager.rs
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use anyhow::{Context, Result};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSettings {
+    #[serde(default)]
+    pub enable_all_project_mcp_servers: bool,
+
+    #[serde(default)]
+    pub enabled_mcpjson_servers: Vec<String>,
+
+    #[serde(default)]
+    pub permissions: Option<Permissions>,
+
+    #[serde(default)]
+    pub hooks: HashMap<String, Vec<HookConfig>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Permissions {
+    #[serde(default)]
+    pub allow: Vec<String>,
+
+    #[serde(default)]
+    pub default_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+
+    pub hooks: Vec<Hook>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Hook {
+    pub r#type: String,  // "command"
+    pub command: String,
+}
+
+impl ClaudeSettings {
+    /// Read settings from file
+    pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        let content = fs::read_to_string(path.as_ref())
+            .context("Failed to read settings file")?;
+
+        let settings: ClaudeSettings = serde_json::from_str(&content)
+            .context("Failed to parse settings JSON")?;
+
+        Ok(settings)
+    }
+
+    /// Write settings to file with pretty formatting
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        let json = serde_json::to_string_pretty(self)
+            .context("Failed to serialize settings")?;
+
+        fs::write(path.as_ref(), json)
+            .context("Failed to write settings file")?;
+
+        Ok(())
+    }
+
+    /// Add a hook to the configuration
+    pub fn add_hook(&mut self, event: &str, hook_config: HookConfig) {
+        self.hooks
+            .entry(event.to_string())
+            .or_insert_with(Vec::new)
+            .push(hook_config);
+    }
+
+    /// Remove hooks matching a command pattern
+    pub fn remove_hook(&mut self, event: &str, command_pattern: &str) {
+        if let Some(configs) = self.hooks.get_mut(event) {
+            configs.retain(|config| {
+                config.hooks.iter().all(|h| !h.command.contains(command_pattern))
+            });
+        }
+    }
+
+    /// Merge another settings object into this one
+    pub fn merge(&mut self, other: ClaudeSettings) {
+        // Merge MCP servers
+        for server in other.enabled_mcpjson_servers {
+            if !self.enabled_mcpjson_servers.contains(&server) {
+                self.enabled_mcpjson_servers.push(server);
+            }
+        }
+
+        // Merge permissions
+        if let Some(other_perms) = other.permissions {
+            if let Some(ref mut perms) = self.permissions {
+                for allow in other_perms.allow {
+                    if !perms.allow.contains(&allow) {
+                        perms.allow.push(allow);
+                    }
+                }
+            } else {
+                self.permissions = Some(other_perms);
+            }
+        }
+
+        // Merge hooks
+        for (event, configs) in other.hooks {
+            self.hooks
+                .entry(event)
+                .or_insert_with(Vec::new)
+                .extend(configs);
+        }
+    }
+
+    /// Validate the settings
+    pub fn validate(&self) -> Result<()> {
+        // Check hook commands reference valid files
+        for (event, configs) in &self.hooks {
+            for config in configs {
+                // Validate matcher is valid regex if present
+                if let Some(ref matcher) = config.matcher {
+                    regex::Regex::new(matcher)
+                        .context(format!("Invalid matcher regex in {} hook: {}", event, matcher))?;
+                }
+
+                // Validate hooks array not empty
+                if config.hooks.is_empty() {
+                    anyhow::bail!("Empty hooks array in {} event", event);
+                }
+
+                for hook in &config.hooks {
+                    // Validate hook type
+                    if hook.r#type != "command" {
+                        anyhow::bail!("Unknown hook type '{}' in {} event", hook.r#type, event);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for ClaudeSettings {
+    fn default() -> Self {
+        Self {
+            enable_all_project_mcp_servers: false,
+            enabled_mcpjson_servers: Vec::new(),
+            permissions: None,
+            hooks: HashMap::new(),
+        }
+    }
+}
+```
+
+**CLI Tool Example:**
+
+```rust
+// src/bin/settings_manager.rs
+
+use clap::{Parser, Subcommand};
+use anyhow::Result;
+use catalyst::settings::*;
+
+#[derive(Parser)]
+#[command(name = "settings-manager")]
+#[command(about = "Manage Claude Code settings.json files", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Read and display settings
+    Read {
+        /// Path to settings.json
+        #[arg(default_value = ".claude/settings.json")]
+        path: String,
+    },
+
+    /// Validate settings file
+    Validate {
+        /// Path to settings.json
+        #[arg(default_value = ".claude/settings.json")]
+        path: String,
+    },
+
+    /// Add a hook to settings
+    AddHook {
+        /// Path to settings.json
+        #[arg(short, long, default_value = ".claude/settings.json")]
+        path: String,
+
+        /// Hook event (UserPromptSubmit, PostToolUse, Stop)
+        #[arg(short, long)]
+        event: String,
+
+        /// Hook command
+        #[arg(short, long)]
+        command: String,
+
+        /// Optional matcher pattern
+        #[arg(short, long)]
+        matcher: Option<String>,
+
+        /// Dry run (don't write changes)
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Remove hooks matching pattern
+    RemoveHook {
+        /// Path to settings.json
+        #[arg(short, long, default_value = ".claude/settings.json")]
+        path: String,
+
+        /// Hook event
+        #[arg(short, long)]
+        event: String,
+
+        /// Command pattern to match
+        #[arg(short, long)]
+        pattern: String,
+
+        /// Dry run
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Merge two settings files
+    Merge {
+        /// Base settings file
+        base: String,
+
+        /// Settings to merge in
+        merge: String,
+
+        /// Output file (defaults to base)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Dry run
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Read { path } => {
+            let settings = ClaudeSettings::read(&path)?;
+            let json = serde_json::to_string_pretty(&settings)?;
+            println!("{}", json);
+        }
+
+        Commands::Validate { path } => {
+            let settings = ClaudeSettings::read(&path)?;
+            settings.validate()?;
+            println!("✅ Settings file is valid");
+        }
+
+        Commands::AddHook { path, event, command, matcher, dry_run } => {
+            let mut settings = ClaudeSettings::read(&path)
+                .unwrap_or_default();
+
+            let hook_config = HookConfig {
+                matcher,
+                hooks: vec![Hook {
+                    r#type: "command".to_string(),
+                    command,
+                }],
+            };
+
+            settings.add_hook(&event, hook_config);
+
+            if dry_run {
+                println!("🔍 Dry run - would write:");
+                println!("{}", serde_json::to_string_pretty(&settings)?);
+            } else {
+                settings.write(&path)?;
+                println!("✅ Hook added to {}", path);
+            }
+        }
+
+        Commands::RemoveHook { path, event, pattern, dry_run } => {
+            let mut settings = ClaudeSettings::read(&path)?;
+            settings.remove_hook(&event, &pattern);
+
+            if dry_run {
+                println!("🔍 Dry run - would write:");
+                println!("{}", serde_json::to_string_pretty(&settings)?);
+            } else {
+                settings.write(&path)?;
+                println!("✅ Hooks removed from {}", path);
+            }
+        }
+
+        Commands::Merge { base, merge, output, dry_run } => {
+            let mut base_settings = ClaudeSettings::read(&base)?;
+            let merge_settings = ClaudeSettings::read(&merge)?;
+
+            base_settings.merge(merge_settings);
+
+            let output_path = output.as_deref().unwrap_or(&base);
+
+            if dry_run {
+                println!("🔍 Dry run - would write to {}:", output_path);
+                println!("{}", serde_json::to_string_pretty(&base_settings)?);
+            } else {
+                base_settings.write(output_path)?;
+                println!("✅ Settings merged to {}", output_path);
+            }
+        }
+    }
+
+    Ok(())
+}
+```
+
+**Usage Examples:**
+
+```bash
+# Read settings
+./settings-manager read .claude/settings.json
+
+# Validate settings
+./settings-manager validate .claude/settings.json
+
+# Add a hook
+./settings-manager add-hook \
+  --event UserPromptSubmit \
+  --command '$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh'
+
+# Add a PostToolUse hook with matcher
+./settings-manager add-hook \
+  --event PostToolUse \
+  --command '$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-tracker.sh' \
+  --matcher 'Edit|Write|MultiEdit'
+
+# Remove hooks matching pattern
+./settings-manager remove-hook \
+  --event UserPromptSubmit \
+  --pattern 'skill-activation'
+
+# Merge settings (dry run first)
+./settings-manager merge base.json new-hooks.json --dry-run
+./settings-manager merge base.json new-hooks.json --output merged.json
+
+# Validate before writing
+./settings-manager validate merged.json
+```
+
+**Updated install.sh to Use Settings Manager:**
+
+```bash
+#!/bin/bash
+# install.sh
+
+# ... build code ...
+
+# Update settings.json using the settings manager
+SETTINGS_FILE="$HOME/.claude/settings.json"
+PROJECT_DIR="$CLAUDE_PROJECT_DIR"
+
+if [ ! -f "$SETTINGS_FILE" ]; then
+    echo "Creating new settings.json..."
+    cat > "$SETTINGS_FILE" << 'EOF'
+{
+  "hooks": {}
+}
+EOF
+fi
+
+# Backup existing settings
+cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
+
+# Add UserPromptSubmit hook
+./target/release/settings-manager add-hook \
+  --path "$SETTINGS_FILE" \
+  --event UserPromptSubmit \
+  --command '$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh'
+
+# Add PostToolUse hook
+./target/release/settings-manager add-hook \
+  --path "$SETTINGS_FILE" \
+  --event PostToolUse \
+  --command '$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-tracker.sh' \
+  --matcher 'Edit|Write|MultiEdit'
+
+# Validate
+./target/release/settings-manager validate "$SETTINGS_FILE"
+
+echo "✅ Settings updated successfully"
+echo "📦 Backup saved to $SETTINGS_FILE.backup"
+```
+
+---
+
+**Benefits:**
+
+- ✅ **Type Safety** - Compile-time validation of structure
+- ✅ **Validation** - Runtime validation of hook configurations
+- ✅ **Merge Support** - Safely merge configurations without losing data
+- ✅ **CLI Tool** - Easy configuration management
+- ✅ **Installation** - Programmatic hook setup
+- ✅ **Backup Safety** - Always backup before modifications
+- ✅ **Dry Run** - Preview changes before applying
+
+**Testing:**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_settings() {
+        let json = r#"{
+            "enableAllProjectMcpServers": true,
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "test.sh"
+                    }]
+                }]
+            }
+        }"#;
+
+        let settings: ClaudeSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.enable_all_project_mcp_servers);
+        assert_eq!(settings.hooks.len(), 1);
+    }
+
+    #[test]
+    fn test_add_hook() {
+        let mut settings = ClaudeSettings::default();
+        settings.add_hook("UserPromptSubmit", HookConfig {
+            matcher: None,
+            hooks: vec![Hook {
+                r#type: "command".to_string(),
+                command: "test.sh".to_string(),
+            }],
+        });
+
+        assert_eq!(settings.hooks.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_settings() {
+        let mut base = ClaudeSettings::default();
+        base.enabled_mcpjson_servers.push("mysql".to_string());
+
+        let mut other = ClaudeSettings::default();
+        other.enabled_mcpjson_servers.push("playwright".to_string());
+
+        base.merge(other);
+
+        assert_eq!(base.enabled_mcpjson_servers.len(), 2);
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut settings = ClaudeSettings::default();
+        settings.add_hook("UserPromptSubmit", HookConfig {
+            matcher: Some("[invalid regex".to_string()),
+            hooks: vec![Hook {
+                r#type: "command".to_string(),
+                command: "test.sh".to_string(),
+            }],
+        });
+
+        assert!(settings.validate().is_err());
+    }
+}
+```
+
+---
+
+**Verification:**
+
+```bash
+# Build with settings manager
+cargo build --release --bin settings-manager
+
+# Test reading existing settings
+./target/release/settings-manager read .claude/settings.json
+
+# Test validation
+./target/release/settings-manager validate .claude/settings.json
+
+# Test adding hook (dry run)
+./target/release/settings-manager add-hook \
+  --event UserPromptSubmit \
+  --command 'test.sh' \
+  --dry-run
+
+# Run unit tests
+cargo test settings
+```
+
+---
+
+**Files to Create:**
+- `src/settings.rs` - Core data structures and operations
+- `src/bin/settings_manager.rs` - CLI tool (optional)
+
+**Files to Modify:**
+- `Cargo.toml` - Add [[bin]] entry for settings-manager
+- `src/lib.rs` - Add `pub mod settings;` if creating library
+- `install.sh` - Use settings-manager for hook installation
+
+**Dependencies Already Have:**
+- ✅ `serde` with derive feature
+- ✅ `serde_json`
+- ✅ `anyhow` (from Phase 2.4)
+- ✅ `clap` (from Phase 2.4)
+- ✅ `regex` (already in dependencies)
+
+**Priority:** MEDIUM-HIGH - Essential for proper installation and configuration management
+
+---
+
+### 2.7 Windows Support & Cross-Platform Compatibility
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 4-5 hours
+
+**Issue:** All scripts and path handling must work on Windows in addition to Linux/macOS.
+
+**Current Problems:**
+- Only bash scripts exist (install.sh, hook wrappers)
+- Path handling may use Unix-specific separators
+- settings.json paths use forward slashes (need to support both)
+- No PowerShell equivalents for Windows users
+- File permissions (chmod) don't work on Windows
+
+---
+
+**Required Changes:**
+
+#### 1. Cross-Platform Path Handling in Rust Code
+
+**Current Issues:**
+```rust
+// May not work correctly on Windows
+let rules_path = format!("{project_dir}/.claude/skills/skill-rules.json");
+if path.contains("/frontend/") { ... }  // Unix-specific
+```
+
+**Tasks:**
+- [ ] Use `std::path::PathBuf` and `Path` everywhere (not String concatenation)
+- [ ] Use `path.join()` instead of string formatting
+- [ ] Use `path.components()` instead of string contains
+- [ ] Test that `CLAUDE_PROJECT_DIR` with backslashes works
+- [ ] Handle both `/` and `\` in user input gracefully
+
+**Fixed Approach:**
+```rust
+use std::path::{Path, PathBuf};
+use std::env;
+
+// Good: Cross-platform
+let project_dir = env::var("CLAUDE_PROJECT_DIR")
+    .map(PathBuf::from)
+    .unwrap_or_else(|_| PathBuf::from("."));
+
+let rules_path = project_dir
+    .join(".claude")
+    .join("skills")
+    .join("skill-rules.json");
+
+// Good: Use path components
+fn get_file_category(path: &Path) -> &'static str {
+    for component in path.components() {
+        match component.as_os_str().to_str() {
+            Some("frontend") | Some("client") => return "frontend",
+            Some("backend") | Some("server") => return "backend",
+            _ => continue,
+        }
+    }
+    "other"
+}
+```
+
+---
+
+#### 2. Create PowerShell Scripts
+
+**Tasks:**
+
+##### install.ps1
+- [ ] Create `install.ps1` (PowerShell equivalent of install.sh)
+- [ ] Handle Rust installation check (rustup)
+- [ ] Build with cargo
+- [ ] Create `~/.claude-hooks/bin/` directory
+- [ ] Copy binaries to user directory
+- [ ] Handle optional --sqlite flag
+- [ ] Add to PATH or provide instructions
+
+**Example: install.ps1**
+```powershell
+#!/usr/bin/env pwsh
+# install.ps1 - Windows installation script
+
+param(
+    [switch]$Sqlite,
+    [switch]$Help
+)
+
+if ($Help) {
+    Write-Host "Usage: ./install.ps1 [-Sqlite] [-Help]"
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  -Sqlite    Build with SQLite support"
+    Write-Host "  -Help      Show this help message"
+    exit 0
+}
+
+# Check for Rust
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    Write-Host "❌ Rust not found. Installing rustup..."
+    Write-Host "Visit: https://rustup.rs/"
+    Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+    .\rustup-init.exe -y
+    Remove-Item rustup-init.exe
+    $env:PATH += ";$env:USERPROFILE\.cargo\bin"
+}
+
+Write-Host "🔨 Building Catalyst hooks..."
+
+# Build
+$features = if ($Sqlite) { "--features sqlite" } else { "" }
+$buildCmd = "cargo build --release $features"
+Invoke-Expression $buildCmd
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ Build failed"
+    exit 1
+}
+
+# Create installation directory
+$installDir = "$env:USERPROFILE\.claude-hooks\bin"
+New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
+# Copy binaries
+Write-Host "📦 Installing to $installDir..."
+Copy-Item "target\release\skill-activation-prompt.exe" $installDir -Force
+Copy-Item "target\release\file-analyzer.exe" $installDir -Force
+
+if ($Sqlite) {
+    Copy-Item "target\release\post-tool-use-tracker-sqlite.exe" $installDir -Force
+}
+
+# Copy source for reference
+$srcDir = "$env:USERPROFILE\.claude-hooks\src"
+New-Item -ItemType Directory -Force -Path $srcDir | Out-Null
+Copy-Item -Recurse -Force "src\*" $srcDir
+
+Write-Host "✅ Installation complete!"
+Write-Host ""
+Write-Host "Binaries installed to:"
+Write-Host "  $installDir"
+Write-Host ""
+Write-Host "Next steps:"
+Write-Host "  1. Copy hook wrappers to your project:"
+Write-Host "     cp .claude/hooks/*.ps1 your-project/.claude/hooks/"
+Write-Host "  2. Update your project's .claude/settings.json"
+Write-Host "  3. Restart Claude Code"
+```
+
+##### Hook Wrappers (PowerShell)
+- [ ] Create `.claude/hooks/skill-activation-prompt.ps1`
+- [ ] Create `.claude/hooks/post-tool-use-tracker.ps1`
+- [ ] Create `.claude/hooks/tsc-check.ps1` (if applicable)
+- [ ] Create `.claude/hooks/trigger-build-resolver.ps1` (if applicable)
+
+**Example: skill-activation-prompt.ps1**
+```powershell
+#!/usr/bin/env pwsh
+# .claude/hooks/skill-activation-prompt.ps1
+
+# Read from stdin and pipe to Rust binary
+$input | & "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+
+# Fallback to project-local binary if standalone not found
+if ($LASTEXITCODE -eq 1 -and -not (Test-Path "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe")) {
+    if (Test-Path "$env:CLAUDE_PROJECT_DIR\target\release\skill-activation-prompt.exe") {
+        $input | & "$env:CLAUDE_PROJECT_DIR\target\release\skill-activation-prompt.exe"
+    }
+}
+```
+
+**Example: post-tool-use-tracker.ps1**
+```powershell
+#!/usr/bin/env pwsh
+# .claude/hooks/post-tool-use-tracker.ps1
+
+$input | & "$env:USERPROFILE\.claude-hooks\bin\post-tool-use-tracker-sqlite.exe"
+
+if ($LASTEXITCODE -eq 1 -and -not (Test-Path "$env:USERPROFILE\.claude-hooks\bin\post-tool-use-tracker-sqlite.exe")) {
+    if (Test-Path "$env:CLAUDE_PROJECT_DIR\target\release\post-tool-use-tracker-sqlite.exe") {
+        $input | & "$env:CLAUDE_PROJECT_DIR\target\release\post-tool-use-tracker-sqlite.exe"
+    }
+}
+```
+
+---
+
+#### 3. Update settings.json for Windows
+
+**Issue:** settings.json on Windows needs to reference PowerShell scripts.
+
+**Tasks:**
+- [ ] Update settings-manager to detect OS
+- [ ] Use `.ps1` extensions on Windows, `.sh` on Unix
+- [ ] Handle path separators correctly in settings.json
+- [ ] Document that settings.json can use forward slashes on Windows (Claude Code normalizes)
+
+**Example: Cross-platform settings addition**
+```rust
+// In settings_manager.rs
+
+#[cfg(windows)]
+fn get_hook_script_extension() -> &'static str {
+    "ps1"
+}
+
+#[cfg(not(windows))]
+fn get_hook_script_extension() -> &'static str {
+    "sh"
+}
+
+// When adding hooks
+let ext = get_hook_script_extension();
+let command = format!(
+    "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.{ext}"
+);
+```
+
+**settings.json on Windows:**
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.ps1"
+      }]
+    }]
+  }
+}
+```
+
+---
+
+#### 4. Update Documentation
+
+**Tasks:**
+- [ ] Add Windows installation instructions to README.md
+- [ ] Add PowerShell examples to docs/standalone-installation.md
+- [ ] Document cross-platform path handling
+- [ ] Add troubleshooting section for Windows-specific issues
+- [ ] Update CLAUDE.md with Windows setup
+
+**README.md Windows Section:**
+```markdown
+## Installation on Windows
+
+### Prerequisites
+- PowerShell 5.1+ (included in Windows 10+)
+- [Rust](https://rustup.rs/) (installer will prompt if missing)
+
+### Install
+```powershell
+# From PowerShell
+.\install.ps1
+
+# With SQLite support
+.\install.ps1 -Sqlite
+```
+
+### Setup in Your Project
+```powershell
+# Copy hook wrappers
+Copy-Item .claude/hooks/*.ps1 your-project/.claude/hooks/
+
+# Update settings.json
+.\target\release\settings-manager.exe add-hook `
+  --event UserPromptSubmit `
+  --command '$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.ps1'
+```
+```
+
+---
+
+#### 5. Testing on Windows
+
+**Tasks:**
+- [ ] Test compilation on Windows (x86_64-pc-windows-msvc)
+- [ ] Test install.ps1 script
+- [ ] Test hook execution from Claude Code on Windows
+- [ ] Test path handling with backslashes
+- [ ] Test settings-manager on Windows
+- [ ] Verify SQLite works on Windows
+- [ ] Test file-analyzer with Windows paths
+- [ ] Document any Windows-specific limitations
+
+**Windows Testing Checklist:**
+```powershell
+# Build
+cargo build --release
+cargo build --release --features sqlite
+
+# Test binaries work
+echo '{"session_id":"test","prompt":"backend","cwd":".","permission_mode":"normal"}' | .\target\release\skill-activation-prompt.exe
+
+# Test file-analyzer with Windows paths
+.\target\release\file-analyzer.exe C:\Users\test\project
+
+# Test settings-manager
+.\target\release\settings-manager.exe validate .claude\settings.json
+
+# Test hooks via PowerShell
+Get-Content test-input.json | .\.claude\hooks\skill-activation-prompt.ps1
+```
+
+---
+
+#### 6. Handle Windows-Specific Edge Cases
+
+**Tasks:**
+- [ ] Handle `USERPROFILE` vs `HOME` environment variable
+- [ ] Handle `Program Files` paths with spaces
+- [ ] Detect PowerShell vs CMD execution context
+- [ ] Handle Windows line endings (CRLF) in JSON files
+- [ ] Test with Windows Defender / antivirus scanning
+- [ ] Handle UNC paths (`\\server\share\`)
+- [ ] Support both PowerShell Core (pwsh) and Windows PowerShell
+
+**Environment Variable Handling:**
+```rust
+use std::env;
+
+fn get_home_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        env::var("USERPROFILE")
+            .or_else(|_| env::var("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Default"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    }
+}
+
+fn get_claude_hooks_dir() -> PathBuf {
+    get_home_dir().join(".claude-hooks").join("bin")
+}
+```
+
+---
+
+#### 7. CI/CD for Windows
+
+**Tasks:**
+- [ ] Add Windows to GitHub Actions matrix
+- [ ] Test on windows-latest runner
+- [ ] Build Windows binaries in CI
+- [ ] Create Windows release artifacts (.exe files)
+- [ ] Test PowerShell scripts in CI
+
+**GitHub Actions Example:**
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --all-features
+
+      - name: Test
+        run: cargo test --all-features
+
+      - name: Test install script (Unix)
+        if: runner.os != 'Windows'
+        run: ./install.sh
+
+      - name: Test install script (Windows)
+        if: runner.os == 'Windows'
+        run: .\install.ps1
+```
+
+---
+
+**Summary of Files to Create:**
+
+**PowerShell Scripts:**
+- [ ] `install.ps1` - Main Windows installer
+- [ ] `.claude/hooks/skill-activation-prompt.ps1`
+- [ ] `.claude/hooks/post-tool-use-tracker.ps1`
+- [ ] `.claude/hooks/tsc-check.ps1` (if applicable)
+- [ ] `.claude/hooks/trigger-build-resolver.ps1` (if applicable)
+
+**Documentation Updates:**
+- [ ] README.md - Add Windows installation section
+- [ ] docs/standalone-installation.md - Add PowerShell examples
+- [ ] docs/windows.md - New file for Windows-specific guidance
+- [ ] CLAUDE.md - Update integration guide for Windows
+
+**Code Updates:**
+- [ ] All `src/bin/*.rs` files - Use PathBuf instead of String paths
+- [ ] `settings_manager.rs` - Detect OS and use correct script extensions
+- [ ] `install.sh` - Add note about Windows users using install.ps1
+- [ ] `.gitattributes` - Ensure correct line endings (*.ps1 text eol=crlf)
+
+---
+
+**Verification Checklist:**
+
+```powershell
+# On Windows machine:
+
+# 1. Build succeeds
+cargo build --release --all-features
+
+# 2. Install script works
+.\install.ps1 -Sqlite
+
+# 3. Binaries installed
+Test-Path "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+
+# 4. Hooks execute
+echo '{"session_id":"test","prompt":"test","cwd":".","permission_mode":"normal"}' | & "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+
+# 5. Settings manager works
+.\target\release\settings-manager.exe validate .claude\settings.json
+
+# 6. File analyzer handles Windows paths
+.\target\release\file-analyzer.exe C:\Users\test\project
+
+# 7. Hooks work via PowerShell wrapper
+Get-Content test.json | .\.claude\hooks\skill-activation-prompt.ps1
+```
+
+---
+
+**Cross-Platform Testing Matrix:**
+
+| Feature | Linux | macOS | Windows | Notes |
+|---------|-------|-------|---------|-------|
+| Build (cargo) | ✅ | ✅ | ✅ | All platforms |
+| Install script | ✅ | ✅ | ✅ | bash vs PowerShell |
+| Hook execution | ✅ | ✅ | ✅ | .sh vs .ps1 |
+| Path handling | ✅ | ✅ | ✅ | / vs \ |
+| SQLite | ✅ | ✅ | ✅ | Bundled feature |
+| Settings manager | ✅ | ✅ | ✅ | Cross-platform |
+| File permissions | ✅ | ✅ | ⚠️ | No chmod on Windows |
+
+---
+
+**Priority:** HIGH - Essential for cross-platform adoption
+
+**Estimated Impact:**
+- 30-40% of potential users are on Windows
+- Rust cross-compilation makes this relatively straightforward
+- PowerShell is modern and well-supported
+- Most code is already cross-platform (Rust standard library)
+
+---
+
+## Phase 3: Polish & Nice-to-Haves 🟢
+
+**Goal:** Professional-grade code quality
+**Priority:** LOW
+**Timeline:** Before crates.io publication
+
+### 3.1 Complete Cargo.toml Metadata
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 15 minutes
+
+**Tasks:**
+- [ ] Update repository URL (remove placeholder)
+- [ ] Add homepage URL
+- [ ] Add readme field
+- [ ] Add keywords (5 max)
+- [ ] Add categories (5 max)
+- [ ] Add documentation URL (docs.rs)
+- [ ] Verify license field is correct
+
+**Implementation:**
+```toml
+[package]
+name = "catalyst"
+version = "0.1.0"
+edition = "2021"
+authors = ["Catalyst Contributors"]
+description = "High-performance Claude Code hooks for skill auto-activation"
+license = "MIT"
+repository = "https://github.com/yourorg/catalyst"
+homepage = "https://github.com/yourorg/catalyst"
+documentation = "https://docs.rs/catalyst"
+readme = "README.md"
+keywords = ["claude-code", "hooks", "automation", "ai", "productivity"]
+categories = ["development-tools", "command-line-utilities"]
+```
+
+**Verification:**
+```bash
+cargo publish --dry-run
+# Should pass validation
+```
+
+**Files to Modify:**
+- `Cargo.toml`
+
+---
+
+### 3.2 Improve Error Types
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 1-2 hours
+
+**Tasks:**
+- [ ] Add `thiserror` dependency
+- [ ] Create custom error type for `skill_activation_prompt`
+- [ ] Create custom error type for `file_analyzer`
+- [ ] Update error handling to use custom types
+- [ ] Ensure error messages are helpful and actionable
+
+**Implementation:**
+```rust
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+enum SkillActivationError {
+    #[error("Failed to read stdin: {0}")]
+    StdinRead(#[from] std::io::Error),
+
+    #[error("Invalid JSON input: {0}")]
+    InvalidJson(#[from] serde_json::Error),
+
+    #[error("Skill rules file not found at {path}")]
+    RulesNotFound { path: String },
+
+    #[error("Failed to parse skill rules: {0}")]
+    RulesInvalid(String),
+}
+
+fn main() -> Result<(), SkillActivationError> {
+    // ...
+}
+```
+
+**Verification:**
+```bash
+# Test error messages
+echo "invalid json" | ./target/release/skill-activation-prompt
+# Should show clear error message
+```
+
+**Files to Modify:**
+- `Cargo.toml` - add `thiserror = "1.0"`
+- `src/bin/skill_activation_prompt.rs`
+- `src/bin/file_analyzer.rs`
+
+---
+
+### 3.3 Code Formatting & Linting
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 15 minutes
+
+**Tasks:**
+- [ ] Run `cargo fmt --all`
+- [ ] Run `cargo clippy --all-features --fix --allow-dirty`
+- [ ] Review and apply clippy suggestions
+- [ ] Set up pre-commit hook for formatting (optional)
+
+**Verification:**
+```bash
+cargo fmt --all -- --check
+# Should show "No changes needed"
+
+cargo clippy --all-features
+# Should show 0 warnings
+```
+
+---
+
+### 3.4 Integration Tests
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 2-3 hours
+
+**Tasks:**
+- [ ] Create `tests/` directory
+- [ ] Write integration test for `skill-activation-prompt`
+  - [ ] Test with sample skill-rules.json
+  - [ ] Verify output format
+  - [ ] Test error cases
+- [ ] Write integration test for `file-analyzer`
+  - [ ] Create test directory structure
+  - [ ] Verify statistics output
+- [ ] Write integration test for `post-tool-use-tracker-sqlite`
+  - [ ] Test database creation
+  - [ ] Verify data persistence
+
+**Structure:**
+```
+tests/
+├── integration_test.rs
+├── fixtures/
+│   ├── sample-skill-rules.json
+│   └── test-files/
+│       ├── frontend/
+│       └── backend/
+```
+
+**Example:**
+```rust
+// tests/integration_test.rs
+use std::process::Command;
+
+#[test]
+fn test_skill_activation_with_backend_prompt() {
+    let output = Command::new("cargo")
+        .args(&["run", "--bin", "skill-activation-prompt"])
+        .input(r#"{"session_id":"test","prompt":"create backend API"}"#)
+        .output()
+        .expect("Failed to run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("backend-dev-guidelines"));
+}
+```
+
+**Verification:**
+```bash
+cargo test --test integration_test
+```
+
+---
+
+### 3.5 Performance Benchmarks
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 1-2 hours
+
+**Tasks:**
+- [ ] Create `benches/` directory
+- [ ] Add `criterion` to dev-dependencies
+- [ ] Write benchmark for skill activation
+- [ ] Write benchmark for file analysis
+- [ ] Establish baseline metrics
+- [ ] Document performance characteristics
+
+**Implementation:**
+```toml
+# Cargo.toml
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "skill_activation"
+harness = false
+```
+
+```rust
+// benches/skill_activation.rs
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn skill_activation_benchmark(c: &mut Criterion) {
+    c.bench_function("skill activation", |b| {
+        b.iter(|| {
+            // Benchmark code
+        });
+    });
+}
+
+criterion_group!(benches, skill_activation_benchmark);
+criterion_main!(benches);
+```
+
+**Verification:**
+```bash
+cargo bench
+# Should complete and generate report
+```
+
+---
+
+## Quality Gates
+
+### Before Any Release
+- [ ] All Phase 1 tasks complete
+- [ ] `cargo clippy --all-features -- -D warnings` passes
+- [ ] `cargo test --all-features` passes
+- [ ] No `unwrap()` in production code paths
+
+### Before 1.0 Release
+- [ ] All Phase 1 and Phase 2 tasks complete
+- [ ] Documentation coverage >80%
+- [ ] Test coverage >70%
+- [ ] All public APIs documented
+
+### Before crates.io Publication
+- [ ] All phases complete
+- [ ] `cargo publish --dry-run` passes
+- [ ] README.md is comprehensive
+- [ ] CHANGELOG.md exists
+- [ ] LICENSE file exists
+
+---
+
+## Metrics Tracking
+
+| Metric | Current | Phase 1 Target | Phase 2 Target | Phase 3 Target |
+|--------|---------|---------------|---------------|---------------|
+| Compiler Warnings | 7 | 0 | 0 | 0 |
+| Clippy Warnings | Unknown | 0 | 0 | 0 |
+| Test Coverage | 0% | 0% | 70% | 80% |
+| Doc Coverage | 0% | 10% | 80% | 95% |
+| Best Practices Score | 19/40 | 28/40 | 35/40 | 38/40 |
+
+---
+
+## Dependencies to Add
+
+### Phase 1
+```toml
+once_cell = "1.19"  # For lazy static regexes
+```
+
+### Phase 2 (Modern CLI & Performance)
+```toml
+# CLI Improvements (Phase 2.4)
+clap = { version = "4.5", features = ["derive"] }  # Argument parsing (must-have)
+anyhow = "1.0"  # Error handling with context (must-have)
+tracing = "0.1"  # Structured logging (must-have)
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }  # Logging control
+colored = "2.1"  # Terminal colors (recommended)
+
+# String/Path/Pattern Optimizations (Phase 2.5)
+ignore = "0.4"   # Respects .gitignore (must-have)
+globset = "0.4"  # Efficient pattern matching (must-have)
+unicase = "2.7"  # Case-insensitive without allocation (recommended)
+
+# Optional performance features
+rayon = { version = "1.8", optional = true }        # Parallel processing
+aho-corasick = { version = "1.1", optional = true } # Multi-pattern matching
+indicatif = { version = "0.17", optional = true }   # Progress bars
+
+# New feature flags
+[features]
+default = []
+sqlite = ["dep:rusqlite", "dep:chrono"]
+parallel = ["dep:rayon"]              # Enable parallel directory traversal
+fast-patterns = ["dep:aho-corasick"]  # Enable multi-pattern keyword matching
+progress = ["dep:indicatif"]          # Enable progress bars
+```
+
+### Phase 3
+```toml
+thiserror = "1.0"   # For better error types (if not using anyhow)
+
+[dev-dependencies]
+criterion = "0.5"   # For benchmarking
+```
+
+---
+
+## Notes
+
+- All changes should maintain backward compatibility unless version is bumped
+- Performance must not regress (verify with benchmarks if added)
+- Binary size should stay under 3MB per binary
+- Startup time target: <5ms for all binaries
+
+---
+
+## References
+
+- [GitHub Rust Best Practices](https://github.com/github/awesome-copilot/blob/main/instructions/rust.instructions.md)
+- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
+- [The Rust Book](https://doc.rust-lang.org/book/)
+- [Cargo Book](https://doc.rust-lang.org/cargo/)
+
+---
+
+**Last Review:** 2025-10-31
+**Next Review:** After Phase 1 completion

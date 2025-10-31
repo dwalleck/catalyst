@@ -1,0 +1,32 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock (keep for binary projects, ignore for libraries)
+# Since this is a binary project, we should commit Cargo.lock
+# Cargo.lock
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code hook state
+.claude/hooks-state/
+.claude/tsc-cache/
+*.log
+
+# Installation artifacts
+~/.claude-hooks/
+
+# Test artifacts
+*.profdata
+*.profraw
+
+# Backup files
+*.bak
+*.tmp
