@@ -7,6 +7,44 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};
 
+// SQL update statements as named constants for maintainability
+const SQL_UPDATE_BACKEND: &str = "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, backend_files = backend_files + 1 WHERE session_id = ?2";
+const SQL_UPDATE_FRONTEND: &str = "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, frontend_files = frontend_files + 1 WHERE session_id = ?2";
+const SQL_UPDATE_DATABASE: &str = "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, database_files = database_files + 1 WHERE session_id = ?2";
+const SQL_UPDATE_OTHER: &str =
+    "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1 WHERE session_id = ?2";
+
+/// File category classification for tracking purposes
+#[derive(Debug, Clone, Copy)]
+enum Category {
+    Backend,
+    Frontend,
+    Database,
+    Other,
+}
+
+impl Category {
+    /// Returns the string representation for database storage
+    fn as_str(&self) -> &'static str {
+        match self {
+            Category::Backend => "backend",
+            Category::Frontend => "frontend",
+            Category::Database => "database",
+            Category::Other => "other",
+        }
+    }
+
+    /// Returns the SQL update statement for this category
+    fn sql_update(&self) -> &'static str {
+        match self {
+            Category::Backend => SQL_UPDATE_BACKEND,
+            Category::Frontend => SQL_UPDATE_FRONTEND,
+            Category::Database => SQL_UPDATE_DATABASE,
+            Category::Other => SQL_UPDATE_OTHER,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct HookInput {
     session_id: String,
@@ -104,7 +142,7 @@ impl Database {
                 file_path,
                 tool,
                 timestamp,
-                category,
+                category.as_str(),
                 analysis.has_async,
                 analysis.has_try_catch,
                 analysis.has_prisma,
@@ -120,7 +158,7 @@ impl Database {
         Ok(())
     }
 
-    fn update_session_summary(&self, session_id: &str, category: &str) -> Result<()> {
+    fn update_session_summary(&self, session_id: &str, category: Category) -> Result<()> {
         let now = Utc::now().to_rfc3339();
 
         // Check if session exists
@@ -142,15 +180,9 @@ impl Database {
             )?;
         }
 
-        // Update session using const SQL strings (no string interpolation for safety)
-        let sql = match category {
-            "backend" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, backend_files = backend_files + 1 WHERE session_id = ?2",
-            "frontend" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, frontend_files = frontend_files + 1 WHERE session_id = ?2",
-            "database" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, database_files = database_files + 1 WHERE session_id = ?2",
-            _ => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1 WHERE session_id = ?2",
-        };
-
-        self.conn.execute(sql, params![&now, session_id])?;
+        // Update session using type-safe category enum with const SQL strings
+        self.conn
+            .execute(category.sql_update(), params![&now, session_id])?;
 
         Ok(())
     }
@@ -166,23 +198,23 @@ struct FileAnalysis {
     line_count: i32,
 }
 
-fn get_file_category(path: &str) -> &str {
+fn get_file_category(path: &str) -> Category {
     if path.contains("/frontend/")
         || path.contains("/client/")
         || path.contains("/src/components/")
         || path.contains("/src/features/")
     {
-        "frontend"
+        Category::Frontend
     } else if path.contains("/src/controllers/")
         || path.contains("/src/services/")
         || path.contains("/src/routes/")
         || path.contains("/backend/")
     {
-        "backend"
+        Category::Backend
     } else if path.contains("/database/") || path.contains("/prisma/") {
-        "database"
+        Category::Database
     } else {
-        "other"
+        Category::Other
     }
 }
 
@@ -250,7 +282,7 @@ fn main() -> Result<()> {
                 if std::env::var("DEBUG_HOOKS").is_ok() {
                     eprintln!(
                         "[Rust/SQLite] Tracked: {file_path} ({})",
-                        get_file_category(&file_path)
+                        get_file_category(&file_path).as_str()
                     );
                 }
             }
