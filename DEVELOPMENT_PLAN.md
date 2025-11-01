@@ -293,7 +293,7 @@ If a phase has many tasks, you can:
 
 ### 0.1 Setup GitHub Actions CI Workflow
 
-**Status:** ❌ Not Started
+**Status:** ✅ Complete
 **Assignee:** TBD
 **Effort:** 1 hour
 
@@ -711,7 +711,7 @@ Phase 0 → Phase 0.2 → Phase 1.x → Phase 2.3a → {Phase 2.4, 2.5, 2.6} →
 
 ### 1.1 Fix Compiler Warnings
 
-**Status:** ❌ Not Started
+**Status:** ✅ Complete
 **Assignee:** TBD
 **Effort:** 30 minutes
 
@@ -797,7 +797,7 @@ self.conn.execute(sql, params![&now, session_id])?;
 
 ### 1.3 Optimize Regex Compilation
 
-**Status:** ❌ Not Started
+**Status:** ✅ Complete
 **Assignee:** TBD
 **Effort:** 1 hour
 
