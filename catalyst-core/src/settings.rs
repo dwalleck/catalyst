@@ -4,9 +4,10 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```no_run
 //! use catalyst_core::settings::*;
 //!
+//! # fn main() -> anyhow::Result<()> {
 //! // Read settings
 //! let mut settings = ClaudeSettings::read(".claude/settings.json")?;
 //!
@@ -22,6 +23,8 @@
 //! // Validate and write
 //! settings.validate()?;
 //! settings.write(".claude/settings.json")?;
+//! # Ok(())
+//! # }
 //! ```
 
 use anyhow::{Context, Result};
