@@ -7,6 +7,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};
+use std::path::Path;
 
 // Pre-compiled regex patterns for file analysis (10-100x faster than compiling on each call)
 static TRY_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"try\s*\{").unwrap());
@@ -65,8 +66,35 @@ struct Database {
     conn: Connection,
 }
 
+/// Validates session_id to prevent path traversal attacks
+/// Only allows alphanumeric characters, hyphens, and underscores
+fn validate_session_id(session_id: &str) -> Result<()> {
+    if session_id.is_empty() {
+        anyhow::bail!("session_id cannot be empty");
+    }
+
+    if session_id.len() > 255 {
+        anyhow::bail!("session_id exceeds maximum length of 255 characters");
+    }
+
+    // Only allow alphanumeric, hyphens, and underscores (prevent path traversal)
+    if !session_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        anyhow::bail!(
+            "session_id contains invalid characters (only alphanumeric, hyphens, and underscores allowed)"
+        );
+    }
+
+    Ok(())
+}
+
 impl Database {
     fn new(session_id: &str) -> Result<Self> {
+        // Validate session_id to prevent path traversal attacks
+        validate_session_id(session_id)?;
+
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         let db_path = format!("{home}/.claude/hooks-state-rust/{session_id}.db");
 
@@ -207,24 +235,25 @@ struct FileAnalysis {
     line_count: i32,
 }
 
+// Cross-platform path categorization using path components instead of string contains
 fn get_file_category(path: &str) -> Category {
-    if path.contains("/frontend/")
-        || path.contains("/client/")
-        || path.contains("/src/components/")
-        || path.contains("/src/features/")
-    {
-        Category::Frontend
-    } else if path.contains("/src/controllers/")
-        || path.contains("/src/services/")
-        || path.contains("/src/routes/")
-        || path.contains("/backend/")
-    {
-        Category::Backend
-    } else if path.contains("/database/") || path.contains("/prisma/") {
-        Category::Database
-    } else {
-        Category::Other
+    let path_obj = Path::new(path);
+
+    // Check each path component (works on both Unix and Windows)
+    for component in path_obj.components() {
+        if let Some(comp_str) = component.as_os_str().to_str() {
+            match comp_str {
+                "frontend" | "client" | "components" | "features" => return Category::Frontend,
+                "controllers" | "services" | "routes" | "api" | "backend" | "server" => {
+                    return Category::Backend
+                }
+                "database" | "prisma" | "migrations" => return Category::Database,
+                _ => continue,
+            }
+        }
     }
+
+    Category::Other
 }
 
 fn should_analyze(path: &str) -> bool {
