@@ -9,6 +9,11 @@ This document captures common Rust mistakes and their solutions discovered durin
 4. [When to Use expect() vs unwrap() vs Proper Error Handling](#when-to-use-expect-vs-unwrap-vs-proper-error-handling)
 5. [Duplicated Logic](#duplicated-logic)
 6. [Performance-Critical Loop Optimizations](#performance-critical-loop-optimizations)
+7. [When NOT to Use Zero-Copy Abstractions](#when-not-to-use-zero-copy-abstractions)
+8. [Atomic File Writes](#atomic-file-writes)
+9. [Parent Directory Creation](#parent-directory-creation)
+10. [TTY Detection for Colored Output](#tty-detection-for-colored-output)
+11. [File I/O Testing with tempfile](#file-io-testing-with-tempfile)
 
 ---
 
@@ -628,18 +633,637 @@ let keyword_match = triggers.keywords_lower.iter()
 
 ---
 
+## Atomic File Writes
+
+### Problem
+Writing files directly can result in data corruption if the process crashes or is interrupted mid-write. This leaves the file in a partially-written, invalid state.
+
+### Example - settings.rs (Phase 2.6)
+
+```rust
+// ❌ WRONG - Direct write can corrupt file if interrupted
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let json = serde_json::to_string_pretty(self)?;
+    fs::write(path.as_ref(), json)?;  // File can be corrupted!
+    Ok(())
+}
+```
+
+**Failure scenarios:**
+- Process killed mid-write
+- Disk full during write
+- I/O error after partial write
+- Power loss during write
+
+**Result:** File contains partial JSON that can't be parsed
+
+### Solution - Atomic Write with Temp File + Rename
+
+```rust
+use std::fs;
+use std::io::Write;
+use anyhow::{Context, Result};
+
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let json = serde_json::to_string_pretty(self)
+        .context("Failed to serialize settings")?;
+
+    // Write to temporary file first
+    let temp_path = path.with_extension("tmp");
+    let mut temp_file = fs::File::create(&temp_path)
+        .context("Failed to create temporary file")?;
+
+    temp_file.write_all(json.as_bytes())
+        .context("Failed to write to temporary file")?;
+
+    // Ensure data is flushed to disk
+    temp_file.sync_all()
+        .context("Failed to sync temporary file")?;
+
+    // Atomic rename (POSIX guarantees atomicity)
+    fs::rename(&temp_path, path)
+        .context("Failed to rename temporary file")?;
+
+    Ok(())
+}
+```
+
+### Why This Works
+
+**Atomic rename guarantees:**
+1. If rename succeeds, the new file is complete and valid
+2. If rename fails, the old file remains unchanged
+3. No intermediate state where file is partially written
+4. On POSIX systems (Linux, macOS), rename is atomic even across overwrites
+
+### When to Use
+
+**Use atomic writes for:**
+- ✅ Configuration files (settings.json)
+- ✅ State files (databases, caches)
+- ✅ Any file where corruption would break functionality
+- ✅ Files that are read by other processes
+
+**Don't need atomic writes for:**
+- ❌ Log files (append-only, partial writes are acceptable)
+- ❌ Temporary scratch files
+- ❌ Files that are write-once, never-overwritten
+
+### Alternative: Use tempfile Crate
+
+```rust
+use tempfile::NamedTempFile;
+use std::io::Write;
+
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let json = serde_json::to_string_pretty(self)?;
+
+    // Create temp file in same directory (important for atomic rename)
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp_file = NamedTempFile::new_in(dir)?;
+
+    temp_file.write_all(json.as_bytes())?;
+    temp_file.sync_all()?;
+
+    // Atomic persist to final location
+    temp_file.persist(path)?;
+
+    Ok(())
+}
+```
+
+**Benefits of tempfile crate:**
+- Automatic cleanup if operation fails
+- Handles temp file naming automatically
+- Cross-platform temp file location
+- Automatic deletion if NamedTempFile is dropped
+
+### Rule
+**Always use atomic writes (temp file + rename) for important configuration or state files. Use the `tempfile` crate for convenience and automatic cleanup.**
+
+---
+
+## Parent Directory Creation
+
+### Problem
+Writing a file fails if parent directories don't exist, even if the path is valid. This is especially common when creating new configuration files in subdirectories.
+
+### Example - settings.rs (Phase 2.6)
+
+```rust
+// ❌ WRONG - Fails if parent directory doesn't exist
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let json = serde_json::to_string_pretty(self)?;
+    fs::write(path.as_ref(), json)?;  // Error: No such file or directory
+    Ok(())
+}
+
+// Example failure:
+settings.write("config/user/settings.json")?;  // Fails if config/user/ doesn't exist
+```
+
+**Error message:**
+```
+Error: No such file or directory (os error 2)
+```
+
+### Solution - Create Parent Directories First
+
+```rust
+use std::fs;
+use std::path::Path;
+use anyhow::{Context, Result};
+
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let json = serde_json::to_string_pretty(self)
+        .context("Failed to serialize settings")?;
+
+    // Create parent directories if they don't exist
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .context("Failed to create parent directories")?;
+    }
+
+    // Now write the file
+    fs::write(path, json)
+        .context("Failed to write settings file")?;
+
+    Ok(())
+}
+```
+
+### Combined with Atomic Writes
+
+```rust
+use tempfile::NamedTempFile;
+use std::io::Write;
+
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let json = serde_json::to_string_pretty(self)?;
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Create temp file in same directory
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp_file = NamedTempFile::new_in(dir)?;
+
+    temp_file.write_all(json.as_bytes())?;
+    temp_file.sync_all()?;
+
+    // Atomic persist
+    temp_file.persist(path)?;
+
+    Ok(())
+}
+```
+
+### Why create_dir_all() is Safe
+
+**`fs::create_dir_all()` is idempotent:**
+- If directory exists, does nothing (no error)
+- If parent directories exist, creates only missing ones
+- Creates entire path in one call
+- Returns success if directory already exists
+
+```rust
+// All of these succeed, even if directories exist:
+fs::create_dir_all("/existing/path")?;      // OK
+fs::create_dir_all("/new/nested/path")?;    // Creates all levels
+fs::create_dir_all(".")?;                   // OK (current dir exists)
+```
+
+### Rule
+**Always call `fs::create_dir_all()` on the parent directory before writing files. It's safe, fast, and prevents "No such file or directory" errors.**
+
+### Checklist for File Writes
+
+```rust
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+
+    // 1. Serialize data
+    let json = serde_json::to_string_pretty(self)?;
+
+    // 2. Create parent directories
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // 3. Atomic write
+    let mut temp_file = NamedTempFile::new_in(
+        path.parent().unwrap_or_else(|| Path::new("."))
+    )?;
+    temp_file.write_all(json.as_bytes())?;
+    temp_file.sync_all()?;
+    temp_file.persist(path)?;
+
+    Ok(())
+}
+```
+
+---
+
+## TTY Detection for Colored Output
+
+### Problem
+Sending ANSI color codes to non-terminal outputs (pipes, files, CI logs) creates unreadable garbage characters and pollutes logs.
+
+### Example - settings_manager.rs (Phase 2.6)
+
+```rust
+// ❌ WRONG - Always uses color codes based on NO_COLOR env var only
+fn main() -> Result<()> {
+    let use_color = env::var("NO_COLOR").is_err();
+
+    if use_color {
+        println!("{}", "✅ Success".green());  // Garbage in CI logs!
+    }
+}
+```
+
+**Problem scenarios:**
+```bash
+# Piped to file - color codes in file
+settings-manager read settings.json > output.txt  # File contains \x1b[32m codes
+
+# Piped to grep - can't match colored text
+settings-manager validate settings.json | grep "Success"  # May not match
+
+# CI logs - unreadable
+# [32m✅ Success[0m  ← Garbage in GitHub Actions logs
+```
+
+### Solution - Check if stdout is a Terminal
+
+```rust
+use std::io::{self, IsTerminal};
+
+fn main() -> Result<()> {
+    // Check both NO_COLOR and whether stdout is a terminal
+    let use_color = env::var("NO_COLOR").is_err() && io::stdout().is_terminal();
+
+    if use_color {
+        println!("{}", "✅ Success".green());
+    } else {
+        println!("✅ Success");
+    }
+
+    Ok(())
+}
+```
+
+### TTY Detection Methods
+
+**Stable Rust (1.70+):**
+```rust
+use std::io::{self, IsTerminal};
+
+// Check stdout
+let is_tty = io::stdout().is_terminal();
+
+// Check stderr (for error messages)
+let is_tty = io::stderr().is_terminal();
+```
+
+**With `atty` crate (older Rust):**
+```rust
+use atty::Stream;
+
+let is_tty = atty::is(Stream::Stdout);
+```
+
+### Complete Color Detection Pattern
+
+```rust
+use std::env;
+use std::io::{self, IsTerminal};
+
+fn should_use_color() -> bool {
+    // Respect NO_COLOR environment variable (standard)
+    if env::var("NO_COLOR").is_ok() {
+        return false;
+    }
+
+    // Respect FORCE_COLOR (for testing)
+    if env::var("FORCE_COLOR").is_ok() {
+        return true;
+    }
+
+    // Only use color if stdout is a terminal
+    io::stdout().is_terminal()
+}
+
+fn main() -> Result<()> {
+    let use_color = should_use_color();
+
+    // Use color decision consistently
+    if use_color {
+        println!("{}", "Success".green());
+    } else {
+        println!("Success");
+    }
+
+    Ok(())
+}
+```
+
+### Integration with `colored` Crate
+
+```rust
+use colored::*;
+
+fn main() -> Result<()> {
+    // Set global override at startup
+    if !should_use_color() {
+        colored::control::set_override(false);
+    }
+
+    // Now all colored output respects the setting
+    println!("{}", "This respects TTY detection".green());
+
+    Ok(())
+}
+```
+
+### When to Check TTY
+
+**Check stdout TTY for:**
+- ✅ Regular output (results, status messages)
+- ✅ JSON output (some tools colorize JSON)
+- ✅ Table formatting
+
+**Check stderr TTY for:**
+- ✅ Error messages
+- ✅ Warning messages
+- ✅ Progress indicators
+
+**Both might be different:**
+```bash
+# stdout piped, stderr to terminal
+program 2> errors.log | less
+
+# stdout to terminal, stderr piped
+program > output.txt
+```
+
+### Rule
+**Always check if stdout is a terminal (`io::stdout().is_terminal()`) in addition to checking `NO_COLOR`. This prevents ANSI codes from polluting pipes, files, and CI logs.**
+
+### Testing
+
+```bash
+# Should NOT have color codes:
+settings-manager read settings.json > output.txt
+cat output.txt  # Should be plain text
+
+# Should have color codes:
+settings-manager read settings.json  # To terminal
+
+# Should respect NO_COLOR:
+NO_COLOR=1 settings-manager read settings.json  # No colors
+```
+
+---
+
+## File I/O Testing with tempfile
+
+### Problem
+Testing file I/O operations without integration tests leaves file handling bugs undetected. Unit tests alone can't catch issues like:
+- Files not written correctly
+- Race conditions in file access
+- Permission errors
+- Parent directory creation failures
+
+### Example - Missing Tests for settings.rs (Phase 2.6)
+
+```rust
+// ❌ WRONG - Only unit tests, no actual file I/O
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        let settings = ClaudeSettings::default();
+        let json = serde_json::to_string(&settings).unwrap();
+        let parsed: ClaudeSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(settings, parsed);
+    }
+
+    // No tests for:
+    // - Actually reading from files
+    // - Actually writing to files
+    // - Error handling when file doesn't exist
+    // - Error handling when parent directory doesn't exist
+}
+```
+
+### Solution - Integration Tests with tempfile
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::{TempDir, NamedTempFile};
+    use std::fs;
+
+    #[test]
+    fn test_write_and_read_roundtrip() {
+        // Create temporary directory
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join("settings.json");
+
+        // Create settings
+        let mut settings = ClaudeSettings::default();
+        settings.enable_all_project_mcp_servers = true;
+        settings.add_hook("UserPromptSubmit", HookConfig {
+            matcher: None,
+            hooks: vec![Hook {
+                r#type: "command".to_string(),
+                command: "test.sh".to_string(),
+            }],
+        });
+
+        // Write to file
+        settings.write(&settings_path).unwrap();
+
+        // Verify file exists
+        assert!(settings_path.exists());
+
+        // Read back from file
+        let loaded = ClaudeSettings::read(&settings_path).unwrap();
+
+        // Verify contents match
+        assert_eq!(settings, loaded);
+        assert_eq!(loaded.hooks.len(), 1);
+    }
+
+    #[test]
+    fn test_write_creates_parent_directories() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Path with nested non-existent directories
+        let settings_path = temp_dir.path()
+            .join("config")
+            .join("user")
+            .join("settings.json");
+
+        let settings = ClaudeSettings::default();
+
+        // Should create parent directories automatically
+        settings.write(&settings_path).unwrap();
+
+        assert!(settings_path.exists());
+        assert!(settings_path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn test_read_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join("nonexistent.json");
+
+        // Should return error, not panic
+        let result = ClaudeSettings::read(&settings_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_invalid_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join("invalid.json");
+
+        // Write invalid JSON
+        fs::write(&settings_path, "{ not valid json }").unwrap();
+
+        // Should return parse error
+        let result = ClaudeSettings::read(&settings_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_overwrite_existing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join("settings.json");
+
+        // Write first settings
+        let mut settings1 = ClaudeSettings::default();
+        settings1.enable_all_project_mcp_servers = true;
+        settings1.write(&settings_path).unwrap();
+
+        // Overwrite with different settings
+        let mut settings2 = ClaudeSettings::default();
+        settings2.enabled_mcpjson_servers.push("mysql".to_string());
+        settings2.write(&settings_path).unwrap();
+
+        // Verify new settings
+        let loaded = ClaudeSettings::read(&settings_path).unwrap();
+        assert_eq!(loaded.enabled_mcpjson_servers.len(), 1);
+        assert!(!loaded.enable_all_project_mcp_servers);
+    }
+}
+```
+
+### Using tempfile Crate
+
+**Add to Cargo.toml:**
+```toml
+[dev-dependencies]
+tempfile = "3.8"
+```
+
+**Key tempfile types:**
+
+```rust
+use tempfile::{TempDir, NamedTempFile};
+
+// Temporary directory (deleted when dropped)
+let temp_dir = TempDir::new()?;
+let path = temp_dir.path().join("file.txt");
+
+// Temporary file (deleted when dropped)
+let temp_file = NamedTempFile::new()?;
+let path = temp_file.path();
+
+// Keep temp file after test
+let (file, path) = temp_file.keep()?;
+```
+
+### Testing CLI Commands
+
+```rust
+use std::process::Command;
+
+#[test]
+fn test_cli_validate_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let settings_path = temp_dir.path().join("settings.json");
+
+    // Create valid settings file
+    let settings = ClaudeSettings::default();
+    settings.write(&settings_path).unwrap();
+
+    // Run CLI command
+    let output = Command::new("./target/debug/settings-manager")
+        .arg("validate")
+        .arg(settings_path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("valid"));
+}
+```
+
+### Rule
+**Always add integration tests using `tempfile` for code that reads or writes files. Unit tests alone don't catch file I/O bugs.**
+
+### Test Coverage Checklist
+
+For file I/O operations, test:
+- [ ] Round-trip write + read produces identical data
+- [ ] Writing to non-existent directories creates parents
+- [ ] Reading non-existent file returns error (doesn't panic)
+- [ ] Reading invalid file format returns error
+- [ ] Overwriting existing file works correctly
+- [ ] File permissions are correct (if applicable)
+- [ ] Atomic write behavior (if implemented)
+
+---
+
 ## Checklist Before Submitting PR
 
 Use this checklist to catch common issues before code review:
 
+**Code Quality:**
 - [ ] All crates used have explicit `use` statements
 - [ ] Binaries using `tracing` initialize subscribers in `main()`
 - [ ] No `.unwrap()` on `Path` operations (`file_name()`, `parent()`, `extension()`)
 - [ ] No duplicated conditional logic
+- [ ] Loop-invariant computations moved outside loops
+
+**File I/O:**
+- [ ] File writes use atomic write pattern (temp file + rename)
+- [ ] File writes call `fs::create_dir_all()` on parent directory
+- [ ] File I/O has integration tests using `tempfile` crate
+
+**CLI/UX:**
+- [ ] Colored output checks both `NO_COLOR` AND `io::stdout().is_terminal()`
+- [ ] Error messages are helpful and actionable
+
+**Testing & CI:**
 - [ ] Run `cargo clippy -- -D warnings` (treats warnings as errors)
 - [ ] Run `cargo fmt --all` (consistent formatting)
+- [ ] Run `cargo test --all-features` (includes doctests)
 - [ ] Build in release mode: `cargo build --release`
-- [ ] Test all features: `cargo test --all-features`
+- [ ] Test with piped output: `program | cat` (should not have color codes)
 
 ---
 
@@ -652,6 +1276,6 @@ Use this checklist to catch common issues before code review:
 
 ---
 
-**Document Version:** 1.1 (Phase 2.5 PR #7 Review)
+**Document Version:** 1.2 (Phase 2.6 PR #8 Review)
 **Last Updated:** 2025-11-01
 **Maintainer:** Catalyst Project Team
