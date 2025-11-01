@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use colored::*;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -6,6 +7,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
+use tracing::debug;
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
@@ -86,6 +88,14 @@ struct MatchedSkill {
 }
 
 fn main() -> Result<()> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     // Read input from stdin
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
@@ -109,6 +119,8 @@ fn main() -> Result<()> {
     let rules: SkillRules =
         serde_json::from_str(&rules_content).context("Failed to parse skill-rules.json")?;
 
+    debug!("Loaded {} skills from rules", rules.skills.len());
+
     // Pre-compile all regex patterns (CRITICAL PERFORMANCE IMPROVEMENT)
     let compiled_rules: HashMap<String, CompiledSkillRule> = rules
         .skills
@@ -128,6 +140,7 @@ fn main() -> Result<()> {
                 .any(|kw| prompt.contains(&kw.to_lowercase()));
 
             if keyword_match {
+                debug!(skill = %skill_name, match_type = "keyword", "Skill matched");
                 matched_skills.push(MatchedSkill {
                     name: skill_name.clone(),
                     _match_type: "keyword".to_string(),
@@ -143,6 +156,7 @@ fn main() -> Result<()> {
                 .any(|regex| regex.is_match(&prompt));
 
             if intent_match {
+                debug!(skill = %skill_name, match_type = "intent", "Skill matched");
                 matched_skills.push(MatchedSkill {
                     name: skill_name.clone(),
                     _match_type: "intent".to_string(),
@@ -177,38 +191,43 @@ fn main() -> Result<()> {
             .collect();
 
         if !critical.is_empty() {
-            println!("⚠️ CRITICAL SKILLS (REQUIRED):");
+            println!("{}", "⚠️ CRITICAL SKILLS (REQUIRED):".red().bold());
             for skill in critical {
-                println!("  → {}", skill.name);
+                println!("  → {}", skill.name.yellow());
             }
             println!();
         }
 
         if !high.is_empty() {
-            println!("📚 RECOMMENDED SKILLS:");
+            println!("{}", "📚 RECOMMENDED SKILLS:".blue().bold());
             for skill in high {
-                println!("  → {}", skill.name);
+                println!("  → {}", skill.name.cyan());
             }
             println!();
         }
 
         if !medium.is_empty() {
-            println!("💡 SUGGESTED SKILLS:");
+            println!("{}", "💡 SUGGESTED SKILLS:".green().bold());
             for skill in medium {
-                println!("  → {}", skill.name);
+                println!("  → {}", skill.name.bright_green());
             }
             println!();
         }
 
         if !low.is_empty() {
-            println!("📌 OPTIONAL SKILLS:");
+            println!("{}", "📌 OPTIONAL SKILLS:".white().bold());
             for skill in low {
-                println!("  → {}", skill.name);
+                println!("  → {}", skill.name.white());
             }
             println!();
         }
 
-        println!("ACTION: Use Skill tool BEFORE responding");
+        println!(
+            "{}",
+            "ACTION: Use Skill tool BEFORE responding"
+                .bright_yellow()
+                .bold()
+        );
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 
