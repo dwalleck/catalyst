@@ -45,6 +45,9 @@ cargo-husky = { workspace = true }
 [features]
 default = []
 sqlite = ["dep:rusqlite", "dep:chrono"]
+# Reserved for future performance enhancements
+# parallel - Will enable parallel file processing with rayon
+# fast-patterns - Will enable multi-pattern string matching with aho-corasick
 parallel = ["dep:rayon"]
 fast-patterns = ["dep:aho-corasick"]
 

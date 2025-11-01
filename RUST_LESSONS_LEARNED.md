@@ -542,6 +542,92 @@ for item in items {
 
 ---
 
+## When NOT to Use Zero-Copy Abstractions
+
+### Problem
+Zero-copy abstractions like `UniCase` are designed for **specific use cases** (equality comparison). Using them incorrectly for other operations (like substring matching) can lead to bugs or unexpected behavior.
+
+### Example - skill_activation_prompt.rs (Phase 2.5 CRITICAL Bug)
+
+**❌ WRONG - UniCase doesn't work for substring matching:**
+```rust
+use unicase::UniCase;
+
+// This may NOT match correctly!
+let prompt_unicase = UniCase::new("I need API help");
+let keyword_unicase = UniCase::new("api");
+prompt_unicase.as_ref().contains(keyword_unicase.as_ref())  // BUG!
+```
+
+**Why it's wrong:**
+- `UniCase` is designed for **equality comparison** (`==`), NOT substring operations
+- `contains()` on `UniCase` may not provide case-insensitive substring matching
+- The abstraction gives false confidence about functionality
+
+**✅ CORRECT - Use pre-lowercased strings:**
+```rust
+// Pre-lowercase keywords once at compile time
+struct CompiledTriggers {
+    keywords_lower: Vec<String>,  // Pre-lowercased
+    intent_regexes: Vec<Regex>,
+}
+
+impl CompiledTriggers {
+    fn from_triggers(triggers: &PromptTriggers) -> Self {
+        let keywords_lower = triggers
+            .keywords
+            .iter()
+            .map(|kw| kw.to_lowercase())
+            .collect();
+
+        Self { keywords_lower, intent_regexes }
+    }
+}
+
+// Lowercase prompt once per activation
+let prompt_lower = prompt.to_lowercase();
+
+// Use standard string contains() with pre-lowercased keywords
+let keyword_match = triggers.keywords_lower.iter()
+    .any(|kw_lower| prompt_lower.contains(kw_lower));
+```
+
+### When to Use Each Approach
+
+| Use Case | Recommended Approach | Why |
+|----------|---------------------|-----|
+| **Equality comparison** | `UniCase` or `to_lowercase()` | `UniCase` avoids allocation for `==` checks |
+| **Substring matching** | `to_lowercase()` + `contains()` | Standard string methods work correctly |
+| **HashMap keys** | `UniCase` wrapper | Zero-allocation case-insensitive keys |
+| **Sorting/ordering** | `UniCase` wrapper | Zero-allocation case-insensitive comparison |
+| **Regex matching** | `(?i)` flag or `to_lowercase()` | Regex has built-in case-insensitive support |
+
+### Rule of Thumb
+
+**Read the documentation carefully** for zero-copy/zero-allocation abstractions:
+- Understand what operations they support
+- Don't assume standard operations (like `contains()`) work the same way
+- When in doubt, use standard library methods with explicit lowercasing
+- Premature optimization can introduce subtle bugs
+
+### Performance Impact of Correct Approach
+
+**Before fix (broken UniCase approach):**
+- Unknown behavior, potential bugs
+
+**After fix (pre-lowercased keywords):**
+- One allocation per activation: `prompt.to_lowercase()` (~50-200 bytes)
+- Keywords lowercased once at startup, not in hot loop
+- Predictable, correct behavior with minimal overhead
+
+### Key Takeaway
+
+**Zero-copy abstractions are powerful but specialized.** Always verify they support your actual use case. In this case:
+- ✅ `UniCase` for equality: `if key1 == key2`
+- ❌ `UniCase` for substring: `if text.contains(substring)`
+
+---
+
 ## Checklist Before Submitting PR
 
 Use this checklist to catch common issues before code review:
@@ -566,6 +652,6 @@ Use this checklist to catch common issues before code review:
 
 ---
 
-**Document Version:** 1.0 (Phase 2.4 PR #6 Review)
-**Last Updated:** 2025-10-31
+**Document Version:** 1.1 (Phase 2.5 PR #7 Review)
+**Last Updated:** 2025-11-01
 **Maintainer:** Catalyst Project Team

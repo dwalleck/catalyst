@@ -25,7 +25,10 @@ static API_REGEX: Lazy<Regex> =
 // Pre-compiled globsets for efficient pattern matching (Phase 2.5 optimization)
 static CODE_EXTENSIONS: Lazy<GlobSet> = Lazy::new(|| {
     let mut builder = GlobSetBuilder::new();
-    for pattern in &["*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.cs"] {
+    for pattern in &[
+        "*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.cs", "*.py", "*.go", "*.java", "*.c", "*.cpp",
+        "*.h",
+    ] {
         builder.add(Glob::new(pattern).unwrap());
     }
     builder.build().unwrap()
@@ -90,6 +93,7 @@ struct Stats {
     prisma_files: usize,
     controller_files: usize,
     api_call_files: usize,
+    failed_files: usize,
 }
 
 // Cross-platform path categorization using path components instead of string contains
@@ -144,6 +148,7 @@ fn analyze_file(path: &Path) -> Result<FileAnalysis> {
 fn print_json_results(stats: &Stats, elapsed: std::time::Duration) {
     let json = serde_json::json!({
         "total_files": stats.total_files,
+        "failed_files": stats.failed_files,
         "categories": {
             "backend": stats.backend_files,
             "frontend": stats.frontend_files,
@@ -181,6 +186,9 @@ fn print_text_results(stats: &Stats, elapsed: std::time::Duration, use_color: bo
     }
 
     println!("Total Files:    {}", stats.total_files);
+    if stats.failed_files > 0 {
+        println!("Failed Files:   {}", stats.failed_files);
+    }
     println!("  Backend:      {}", stats.backend_files);
     println!("  Frontend:     {}", stats.frontend_files);
     println!("  Database:     {}", stats.database_files);
@@ -329,6 +337,7 @@ fn main() -> Result<()> {
             }
             Err(e) => {
                 warn!("Failed to analyze {}: {}", path.display(), e);
+                stats.failed_files += 1;
             }
         }
     }

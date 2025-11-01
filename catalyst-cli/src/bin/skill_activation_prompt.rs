@@ -8,7 +8,6 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use tracing::debug;
-use unicase::UniCase;
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
@@ -27,9 +26,9 @@ struct PromptTriggers {
     intent_patterns: Vec<String>,
 }
 
-// Compiled version of PromptTriggers with pre-compiled regexes
+// Compiled version of PromptTriggers with pre-compiled regexes and lowercased keywords
 struct CompiledTriggers {
-    keywords: Vec<String>,
+    keywords_lower: Vec<String>, // Pre-lowercased for efficient substring matching
     intent_regexes: Vec<Regex>,
 }
 
@@ -41,8 +40,15 @@ impl CompiledTriggers {
             .filter_map(|pattern| Regex::new(pattern).ok())
             .collect();
 
+        // Pre-lowercase keywords once during compilation (eliminates N allocations per check)
+        let keywords_lower = triggers
+            .keywords
+            .iter()
+            .map(|kw| kw.to_lowercase())
+            .collect();
+
         Self {
-            keywords: triggers.keywords.clone(),
+            keywords_lower,
             intent_regexes,
         }
     }
@@ -103,8 +109,9 @@ fn main() -> Result<()> {
 
     let data: HookInput = serde_json::from_str(&input).context("Failed to parse hook input")?;
 
-    // Phase 2.5: Keep original prompt, use unicase for zero-allocation comparison
+    // Phase 2.5: Lowercase prompt once for efficient substring matching
     let prompt = &data.prompt;
+    let prompt_lower = prompt.to_lowercase();
 
     // Load skill rules (cross-platform path handling)
     let project_dir = env::var("CLAUDE_PROJECT_DIR")
@@ -132,18 +139,14 @@ fn main() -> Result<()> {
 
     let mut matched_skills = Vec::new();
 
-    // Phase 2.5: CRITICAL FIX - Create UniCase wrapper ONCE outside the loop
-    let prompt_unicase = UniCase::new(prompt.as_str());
-
     // Check each skill for matches using pre-compiled regexes
     for (skill_name, compiled_rule) in &compiled_rules {
         if let Some(triggers) = &compiled_rule.compiled_triggers {
-            // Phase 2.5: Zero-allocation case-insensitive keyword matching with unicase
-            let keyword_match = triggers.keywords.iter().any(|kw| {
-                let keyword_unicase = UniCase::new(kw.as_str());
-                // Use as_ref() to get &str for contains() check
-                prompt_unicase.as_ref().contains(keyword_unicase.as_ref())
-            });
+            // Case-insensitive keyword matching using pre-lowercased keywords
+            let keyword_match = triggers
+                .keywords_lower
+                .iter()
+                .any(|kw_lower| prompt_lower.contains(kw_lower));
 
             if keyword_match {
                 debug!(skill = %skill_name, match_type = "keyword", "Skill matched");
