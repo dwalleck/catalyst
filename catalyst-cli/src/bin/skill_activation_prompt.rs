@@ -97,7 +97,7 @@ fn main() -> Result<()> {
     // Load skill rules (cross-platform path handling)
     let project_dir = env::var("CLAUDE_PROJECT_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/home/project"));
+        .unwrap_or_else(|_| PathBuf::from("."));
 
     let rules_path = project_dir
         .join(".claude")

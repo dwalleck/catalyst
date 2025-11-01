@@ -5,9 +5,10 @@ use regex::Regex;
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // Pre-compiled regex patterns for file analysis (10-100x faster than compiling on each call)
 static TRY_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"try\s*\{").unwrap());
@@ -23,6 +24,24 @@ const SQL_UPDATE_FRONTEND: &str = "UPDATE sessions SET last_activity = ?1, total
 const SQL_UPDATE_DATABASE: &str = "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, database_files = database_files + 1 WHERE session_id = ?2";
 const SQL_UPDATE_OTHER: &str =
     "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1 WHERE session_id = ?2";
+
+/// Returns the home directory path in a cross-platform way
+/// On Windows: Uses USERPROFILE, falls back to HOME
+/// On Unix/Linux/macOS: Uses HOME
+#[cfg(windows)]
+fn get_home_dir() -> PathBuf {
+    env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Default"))
+}
+
+#[cfg(not(windows))]
+fn get_home_dir() -> PathBuf {
+    env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
 
 /// File category classification for tracking purposes
 #[derive(Debug, Clone, Copy)]
@@ -95,11 +114,13 @@ impl Database {
         // Validate session_id to prevent path traversal attacks
         validate_session_id(session_id)?;
 
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        let db_path = format!("{home}/.claude/hooks-state-rust/{session_id}.db");
+        // Cross-platform home directory and path construction
+        let home = get_home_dir();
+        let hooks_dir = home.join(".claude").join("hooks-state-rust");
+        let db_path = hooks_dir.join(format!("{session_id}.db"));
 
         // Ensure directory exists
-        fs::create_dir_all(format!("{home}/.claude/hooks-state-rust"))?;
+        fs::create_dir_all(&hooks_dir)?;
 
         let conn = Connection::open(&db_path)?;
 
