@@ -146,7 +146,13 @@ fn print_json_results(stats: &Stats, elapsed: std::time::Duration) {
         "duration_ms": elapsed.as_millis()
     });
 
-    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    // Handle serialization error gracefully (though unlikely with simple JSON)
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json).unwrap_or_else(|e| {
+            format!(r#"{{"error": "Failed to serialize JSON: {}"}}"#, e)
+        })
+    );
 }
 
 fn print_text_results(stats: &Stats, elapsed: std::time::Duration, use_color: bool) {

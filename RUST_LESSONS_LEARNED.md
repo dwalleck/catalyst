@@ -6,7 +6,8 @@ This document captures common Rust mistakes and their solutions discovered durin
 1. [Redundant Single-Component Imports](#redundant-single-component-imports)
 2. [Uninitialized Tracing Subscribers](#uninitialized-tracing-subscribers)
 3. [Unsafe unwrap() on Path Operations](#unsafe-unwrap-on-path-operations)
-4. [Duplicated Logic](#duplicated-logic)
+4. [When to Use expect() vs unwrap() vs Proper Error Handling](#when-to-use-expect-vs-unwrap-vs-proper-error-handling)
+5. [Duplicated Logic](#duplicated-logic)
 
 ---
 
@@ -201,6 +202,133 @@ builder.add(Glob::new("*.rs").unwrap());  // Pattern is a literal
 // SAFETY: Path came from walkdir which only returns files with valid names
 let name = path.file_name().unwrap();
 ```
+
+---
+
+## When to Use expect() vs unwrap() vs Proper Error Handling
+
+### Problem
+Knowing when to use `.unwrap()`, `.expect()`, or proper error handling (`?` operator) is crucial for writing maintainable Rust code.
+
+### Guidelines
+
+**Use `.expect("message")` when:**
+- You have a clear invariant that should never fail
+- You want to document WHY failure is impossible
+- Failure indicates a programming error (bug), not a runtime condition
+
+**Use `.unwrap()` when:**
+- Prototyping or example code where failure is acceptable
+- The operation literally cannot fail (e.g., compiling hardcoded regexes)
+- ONLY in test code
+
+**Use proper error handling (`?`) when:**
+- In production code where failure is a possibility
+- The error should propagate to the caller
+- You want to provide context about what failed
+
+### Examples
+
+```rust
+// ✅ GOOD: expect() with clear message for invariants
+fn process_config() -> Result<()> {
+    // This is a hardcoded path that we control
+    let config_path = Path::new("/etc/myapp/config.toml");
+    let name = config_path.file_name()
+        .expect("config_path is a literal with a filename");
+
+    // ... use name ...
+    Ok(())
+}
+
+// ✅ GOOD: expect() documents why failure is impossible
+static VALID_REGEX: Lazy<Regex> = Lazy::new(|| {
+    // This pattern is a string literal - if it's invalid, it's a bug
+    Regex::new(r"^\d{3}-\d{2}-\d{4}$")
+        .expect("SSN regex pattern is valid")
+});
+
+// ✅ GOOD: Proper error handling for runtime conditions
+fn read_user_file(path: &Path) -> Result<String> {
+    // User-provided path might not exist or be readable
+    fs::read_to_string(path)
+        .with_context(|| format!("Failed to read file: {}", path.display()))?
+}
+
+// ❌ BAD: unwrap() on user input
+fn parse_user_input(input: &str) -> u32 {
+    input.parse().unwrap()  // Will panic on invalid input!
+}
+
+// ✅ GOOD: Return Result for user input
+fn parse_user_input(input: &str) -> Result<u32> {
+    input.parse()
+        .with_context(|| format!("Invalid number: {}", input))
+}
+
+// ✅ GOOD: unwrap_or_else() with graceful fallback
+fn print_json(data: &serde_json::Value) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(data).unwrap_or_else(|e| {
+            // Even though serialization rarely fails, handle it gracefully
+            format!(r#"{{"error": "Failed to serialize: {}"}}"#, e)
+        })
+    );
+}
+```
+
+### Decision Tree
+
+```
+Is this production code?
+├─ No (prototype/example) → unwrap() is acceptable
+└─ Yes → Continue...
+    │
+    ├─ Can this operation fail at runtime?
+    │  ├─ Yes (user input, file I/O, network) → Use ? operator
+    │  └─ No → Continue...
+    │      │
+    │      ├─ Is failure a programming bug?
+    │      │  ├─ Yes (hardcoded values, invariants) → Use .expect("why")
+    │      │  └─ No → Use unwrap_or_else() with fallback
+    │      │
+    │      └─ Can I provide a sensible default?
+    │          ├─ Yes → Use unwrap_or() or unwrap_or_else()
+    │          └─ No → Use .expect("why")
+```
+
+### Real-World Examples from This Project
+
+```rust
+// ✅ GOOD: expect() for compile-time regex (file_analyzer.rs)
+static TRY_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"try\s*\{|try:|except:")
+        .expect("TRY_REGEX pattern is valid")
+});
+
+// ✅ GOOD: unwrap_or_else() for path operations (file_analyzer.rs:285)
+let file_name = path
+    .file_name()
+    .map(|name| name.to_string_lossy())
+    .unwrap_or_else(|| path.display().to_string().into());
+
+// ✅ GOOD: unwrap_or_else() for JSON serialization (file_analyzer.rs:149)
+println!(
+    "{}",
+    serde_json::to_string_pretty(&json).unwrap_or_else(|e| {
+        format!(r#"{{"error": "Failed to serialize JSON: {}"}}"#, e)
+    })
+);
+
+// ✅ GOOD: ? operator for user input (file_analyzer.rs:211)
+if !args.directory.exists() {
+    anyhow::bail!("Directory does not exist: {}", args.directory.display());
+}
+```
+
+### Rule
+**In production code: Use `?` for runtime errors, `.expect("why")` for invariants, and `.unwrap_or_else()` for graceful degradation. Never use bare `.unwrap()` except in tests.**
 
 ---
 
