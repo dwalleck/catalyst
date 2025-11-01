@@ -32,6 +32,9 @@ colored = "2.1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = "0.4"
 
+# Pre-commit hooks (installs automatically on cargo build)
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+
 [profile.release]
 opt-level = 3        # Maximum optimization
 lto = true           # Link-time optimization

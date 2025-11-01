@@ -1,0 +1,34 @@
+#!/bin/bash
+set -e
+
+echo "🔍 Running pre-commit checks..."
+echo ""
+
+# Format check
+echo "  📝 Checking formatting..."
+cargo fmt --all -- --check || {
+    echo ""
+    echo "❌ Format check failed!"
+    echo "   Run: cargo fmt --all"
+    exit 1
+}
+
+# Clippy (treat warnings as errors)
+echo "  🔎 Running clippy..."
+cargo clippy --workspace --all-features -- -D warnings || {
+    echo ""
+    echo "❌ Clippy failed!"
+    exit 1
+}
+
+# Build check
+echo "  🔨 Building..."
+cargo build --workspace --all-features || {
+    echo ""
+    echo "❌ Build check failed!"
+    exit 1
+}
+
+echo ""
+echo "✅ All pre-commit checks passed!"
+echo ""

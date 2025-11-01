@@ -29,6 +29,10 @@ colored = { workspace = true }
 rusqlite = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 
+[dev-dependencies]
+# Pre-commit hooks (installs automatically on cargo build)
+cargo-husky = { workspace = true }
+
 [features]
 default = []
 sqlite = ["dep:rusqlite", "dep:chrono"]
