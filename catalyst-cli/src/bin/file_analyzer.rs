@@ -192,7 +192,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Disable colors if requested or if NO_COLOR is set
-    if args.no_color || std::env::var("NO_COLOR").is_ok() {
+    let use_color = !args.no_color && std::env::var("NO_COLOR").is_err();
+    if !use_color {
         colored::control::set_override(false);
     }
 
@@ -211,8 +212,6 @@ fn main() -> Result<()> {
     }
 
     let start = Instant::now();
-
-    let use_color = !args.no_color && std::env::var("NO_COLOR").is_err();
 
     if args.format == "text" {
         if use_color {
@@ -279,20 +278,19 @@ fn main() -> Result<()> {
                 // Flag risky patterns
                 if analysis.has_async && !analysis.has_try_catch {
                     if args.format == "text" {
+                        // Safe: We know this is a file from walkdir, so file_name() won't be None
+                        let file_name = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy())
+                            .unwrap_or_else(|| path.display().to_string().into());
+
                         if use_color {
                             println!(
                                 "{}",
-                                format!(
-                                    "⚠️  {} - Async without try/catch",
-                                    path.file_name().unwrap().to_string_lossy()
-                                )
-                                .yellow()
+                                format!("⚠️  {} - Async without try/catch", file_name).yellow()
                             );
                         } else {
-                            println!(
-                                "⚠️  {} - Async without try/catch",
-                                path.file_name().unwrap().to_string_lossy()
-                            );
+                            println!("⚠️  {} - Async without try/catch", file_name);
                         }
                     }
 
