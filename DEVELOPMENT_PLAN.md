@@ -15,6 +15,267 @@ This plan addresses code quality improvements identified during the Rust best pr
 
 ---
 
+## Development Workflow
+
+**Process:** Feature Branch → Implement → Test → Commit → Push → PR → CI → Merge
+
+### Branch Naming Convention
+
+Use descriptive branch names following this pattern:
+
+```
+<type>/<phase>-<description>
+
+Examples:
+- feat/phase-0-ci-setup
+- feat/phase-1.1-error-handling
+- feat/phase-2.3a-cross-platform-paths
+- feat/phase-2.4b-windows-cli
+- fix/phase-1-clippy-warnings
+- docs/phase-0-readme-update
+- refactor/phase-2.5-performance
+```
+
+**Types:**
+- `feat/` - New feature or phase implementation
+- `fix/` - Bug fixes
+- `refactor/` - Code restructuring without behavior change
+- `docs/` - Documentation updates
+- `test/` - Adding or updating tests
+- `chore/` - Maintenance tasks (dependencies, tooling)
+
+### Development Cycle for Each Phase
+
+**1. Create Feature Branch**
+
+```bash
+# From main branch
+git checkout main
+git pull origin main
+
+# Create feature branch
+git checkout -b feat/phase-X.Y-description
+```
+
+**2. Implement Phase Tasks**
+
+- Work through all tasks in the phase checklist
+- Make frequent small commits (not one giant commit)
+- Write clear commit messages following conventional commits format
+
+**3. Test Locally BEFORE Committing**
+
+```bash
+# Run all quality checks that CI will run
+cargo fmt --all --check           # Check formatting
+cargo clippy --workspace --all-features -- -D warnings  # Check linting
+cargo test --workspace --all-features                   # Run tests
+cargo build --workspace --all-features --release        # Build release
+
+# If Phase 0 is complete, test install script
+./install.sh --help  # or install.ps1 -Help on Windows
+```
+
+**Fix any issues** before committing. Do not push code that fails these checks.
+
+**4. Commit Changes**
+
+```bash
+# Stage files
+git add <files>
+
+# Commit with descriptive message
+git commit -m "feat(phase-X.Y): Brief description
+
+Detailed explanation of what was implemented:
+- Task 1 completed
+- Task 2 completed
+- Added tests for X
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**Commit Message Guidelines:**
+- Use conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`
+- Include phase number in scope: `feat(phase-1.1):`, `fix(phase-2.3a):`
+- Keep subject line under 72 characters
+- Include detailed body explaining what and why (not how)
+- Include Claude Code attribution
+
+**5. Push to GitHub**
+
+```bash
+git push -u origin feat/phase-X.Y-description
+```
+
+**6. Create Pull Request**
+
+```bash
+# Using GitHub CLI
+gh pr create --title "feat(phase-X.Y): Brief description" --body "$(cat <<'EOF'
+## Summary
+Brief overview of what this PR implements.
+
+## Phase Checklist
+Reference the phase from DEVELOPMENT_PLAN.md:
+- [x] Task 1
+- [x] Task 2
+- [ ] Task 3 (if any incomplete)
+
+## Testing
+How this was tested:
+- [ ] `cargo fmt --check` passes
+- [ ] `cargo clippy` passes
+- [ ] `cargo test` passes
+- [ ] `cargo build --release` succeeds
+- [ ] Tested on: Linux / macOS / Windows (check applicable)
+
+## Quality Gates
+- [ ] Zero compiler warnings
+- [ ] Zero clippy warnings
+- [ ] All tests pass
+- [ ] Documentation updated (if applicable)
+
+## Breaking Changes
+None / List any breaking changes
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+**7. Wait for CI Validation**
+
+Phase 0 CI will automatically:
+- ✅ Run on all platforms (Linux, macOS, Windows)
+- ✅ Check formatting (`cargo fmt`)
+- ✅ Check linting (`cargo clippy -D warnings`)
+- ✅ Run tests (`cargo test`)
+- ✅ Build release binaries
+
+**If CI fails:**
+1. Review the CI logs
+2. Fix issues locally
+3. Test again locally
+4. Commit the fix
+5. Push to the same branch (PR updates automatically)
+
+**8. Merge After CI Passes**
+
+- ✅ CI must be green on all platforms
+- ✅ PR must be reviewed (if team workflow requires)
+- ✅ Merge using "Squash and merge" or "Rebase and merge" (maintain clean history)
+
+```bash
+# After merge, update local main
+git checkout main
+git pull origin main
+git branch -d feat/phase-X.Y-description  # Delete local branch
+```
+
+### Testing Requirements
+
+**Before Opening PR:**
+
+| Check | Command | Required |
+|-------|---------|----------|
+| Formatting | `cargo fmt --all --check` | ✅ Mandatory |
+| Linting | `cargo clippy --workspace --all-features -- -D warnings` | ✅ Mandatory |
+| Tests | `cargo test --workspace --all-features` | ✅ Mandatory |
+| Build | `cargo build --workspace --all-features --release` | ✅ Mandatory |
+| Install Script | `./install.sh` or `install.ps1` | ✅ If modified |
+
+**Optional but Recommended:**
+
+| Check | Command | When |
+|-------|---------|------|
+| Documentation | `cargo doc --workspace --no-deps --open` | If adding public APIs |
+| Benchmarks | `cargo bench` (if criterion added) | If claiming performance improvements |
+| Cross-platform | Test on Linux, macOS, Windows | For path handling or OS-specific code |
+
+### Phase Completion Criteria
+
+A phase is considered **complete** when:
+
+- ✅ All tasks in the phase checklist are checked off
+- ✅ PR has been merged to main
+- ✅ CI is passing on main branch
+- ✅ Documentation is updated (if applicable)
+- ✅ Tests are added (if applicable)
+- ✅ Phase status in DEVELOPMENT_PLAN.md is updated to "✅ Complete"
+
+### Example: Implementing Phase 1.1
+
+```bash
+# 1. Create branch
+git checkout main
+git pull origin main
+git checkout -b feat/phase-1.1-error-handling
+
+# 2. Implement phase 1.1 tasks
+# ... work on error handling improvements ...
+
+# 3. Test locally
+cargo fmt --all --check
+cargo clippy --workspace --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo build --workspace --all-features --release
+
+# 4. Commit
+git add src/
+git commit -m "feat(phase-1.1): Replace unwrap with proper error handling
+
+- Replaced unwrap() in skill-activation-prompt with anyhow::Result
+- Added context to all error paths
+- Added error handling tests
+- Zero remaining unwrap() calls in production code
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+
+# 5. Push
+git push -u origin feat/phase-1.1-error-handling
+
+# 6. Create PR
+gh pr create --title "feat(phase-1.1): Replace unwrap with proper error handling" \
+  --body "Implements Phase 1.1 error handling improvements..."
+
+# 7. Wait for CI (green checks on all platforms)
+
+# 8. Merge via GitHub UI, then:
+git checkout main
+git pull origin main
+git branch -d feat/phase-1.1-error-handling
+```
+
+### Handling Multiple Related Changes
+
+If a phase has many tasks, you can:
+
+**Option 1: Single PR per phase** (recommended for small phases)
+- One feature branch
+- One PR
+- Faster, simpler
+
+**Option 2: Multiple PRs per phase** (for large phases like 2.6)
+- Break into logical chunks
+- Example: Phase 2.6 could be:
+  - `feat/phase-2.6-settings-structs` - Data structures
+  - `feat/phase-2.6-settings-operations` - Core operations
+  - `feat/phase-2.6-cli-tool` - CLI binary
+  - `feat/phase-2.6b-windows-support` - Windows PowerShell
+
+**Choose based on:**
+- Phase complexity
+- Number of files changed
+- Logical separation of concerns
+- Review-ability (huge PRs are hard to review)
+
+---
+
 ## Phase 0: CI/CD Foundation 🔵
 
 **Goal:** Establish automated quality gates for all future development
