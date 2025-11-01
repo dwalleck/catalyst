@@ -1,0 +1,42 @@
+[package]
+name = "catalyst-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Command-line tools for Catalyst - hooks and utilities"
+
+[dependencies]
+# Import core library (will be used in Phase 2.6 for settings management)
+# Currently not used by binaries, but included to establish dependency for future use
+catalyst-core = { path = "../catalyst-core" }
+
+# CLI-specific dependencies from workspace
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }
+once_cell = { workspace = true }
+walkdir = { workspace = true }
+
+# SQLite feature dependencies
+rusqlite = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+
+[features]
+default = []
+sqlite = ["dep:rusqlite", "dep:chrono"]
+
+# Binary definitions
+[[bin]]
+name = "skill-activation-prompt"
+path = "src/bin/skill_activation_prompt.rs"
+
+[[bin]]
+name = "file-analyzer"
+path = "src/bin/file_analyzer.rs"
+
+[[bin]]
+name = "post-tool-use-tracker-sqlite"
+path = "src/bin/post_tool_use_tracker_sqlite.rs"
+required-features = ["sqlite"]

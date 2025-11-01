@@ -1,0 +1,17 @@
+[package]
+name = "catalyst-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core library for Catalyst - shared utilities and settings management"
+
+[dependencies]
+# Phase 2.6: Settings management
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+# Phase 2.2: Unit tests will be added here
