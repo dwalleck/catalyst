@@ -14,6 +14,8 @@ This document captures common Rust mistakes and their solutions discovered durin
 9. [Parent Directory Creation](#parent-directory-creation)
 10. [TTY Detection for Colored Output](#tty-detection-for-colored-output)
 11. [File I/O Testing with tempfile](#file-io-testing-with-tempfile)
+12. [Using Constants for Validation](#using-constants-for-validation)
+13. [CLI User Feedback for File Operations](#cli-user-feedback-for-file-operations)
 
 ---
 
@@ -1238,6 +1240,400 @@ For file I/O operations, test:
 
 ---
 
+## Using Constants for Validation
+
+### Problem
+Using magic strings for validation makes code fragile and error-prone. Typos in string comparisons won't be caught at compile time, and adding new valid values requires searching through code to find all validation points.
+
+### Example - settings.rs (Phase 2.6)
+
+```rust
+// ❌ WRONG - Magic strings scattered throughout code
+pub fn validate(&self) -> Result<()> {
+    for hook in &config.hooks {
+        if hook.r#type != "command" {  // Magic string
+            anyhow::bail!("Unknown hook type '{}'", hook.r#type);
+        }
+    }
+    Ok(())
+}
+
+// In CLI:
+fn main() {
+    // More magic strings
+    settings.add_hook("UserPromptSubmit", hook_config);  // Typo-prone
+    settings.add_hook("PostToolUse", hook_config);       // No validation
+}
+```
+
+**Problems:**
+- Typos not caught until runtime: `"UserPromtSubmit"` (missing 'p')
+- No autocomplete/IDE support
+- Can't easily see all valid values
+- Changing a value requires finding all occurrences
+- No compile-time validation
+
+### Solution - Define Constants
+
+```rust
+// ✅ CORRECT - Define constants for all valid values
+
+// In settings.rs or constants.rs
+pub mod constants {
+    // Hook types
+    pub const HOOK_TYPE_COMMAND: &str = "command";
+    // Future: HOOK_TYPE_SCRIPT, HOOK_TYPE_FUNCTION, etc.
+
+    // Hook events (from Claude Code documentation)
+    pub const EVENT_USER_PROMPT_SUBMIT: &str = "UserPromptSubmit";
+    pub const EVENT_POST_TOOL_USE: &str = "PostToolUse";
+    pub const EVENT_STOP: &str = "Stop";
+
+    // All valid events for validation
+    pub const VALID_EVENTS: &[&str] = &[
+        EVENT_USER_PROMPT_SUBMIT,
+        EVENT_POST_TOOL_USE,
+        EVENT_STOP,
+    ];
+
+    // All valid hook types
+    pub const VALID_HOOK_TYPES: &[&str] = &[
+        HOOK_TYPE_COMMAND,
+    ];
+}
+
+use constants::*;
+
+pub fn validate(&self) -> Result<()> {
+    for (event, configs) in &self.hooks {
+        // Validate event name
+        if !VALID_EVENTS.contains(&event.as_str()) {
+            anyhow::bail!(
+                "Unknown event '{}'. Valid events: {}",
+                event,
+                VALID_EVENTS.join(", ")
+            );
+        }
+
+        for config in configs {
+            for hook in &config.hooks {
+                // Validate hook type
+                if !VALID_HOOK_TYPES.contains(&hook.r#type.as_str()) {
+                    anyhow::bail!(
+                        "Unknown hook type '{}'. Valid types: {}",
+                        hook.r#type,
+                        VALID_HOOK_TYPES.join(", ")
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+### CLI with Constants
+
+```rust
+use catalyst_core::settings::constants::*;
+
+fn main() -> Result<()> {
+    // Autocomplete and compile-time validation
+    settings.add_hook(EVENT_USER_PROMPT_SUBMIT, HookConfig {
+        matcher: None,
+        hooks: vec![Hook {
+            r#type: HOOK_TYPE_COMMAND.to_string(),
+            command: "skill-activation.sh".to_string(),
+        }],
+    });
+
+    // Typos caught by IDE (no such constant)
+    // settings.add_hook(EVENT_USER_PROMT_SUBMIT, ...);  // Won't compile!
+
+    Ok(())
+}
+```
+
+### Using enums for Type Safety (Advanced)
+
+```rust
+// ✅ EVEN BETTER - Use enums for compile-time type safety
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookEvent {
+    UserPromptSubmit,
+    PostToolUse,
+    Stop,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookType {
+    Command,
+    // Future: Script, Function, etc.
+}
+
+impl HookEvent {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::PostToolUse => "PostToolUse",
+            Self::Stop => "Stop",
+        }
+    }
+}
+
+// Now the type system enforces validity
+pub struct ClaudeSettings {
+    pub hooks: HashMap<HookEvent, Vec<HookConfig>>,  // Can only use valid events!
+}
+
+pub struct Hook {
+    pub r#type: HookType,  // Can only use valid types!
+    pub command: String,
+}
+
+// No validation needed - impossible to create invalid values!
+```
+
+**Benefits of enum approach:**
+- Impossible to create invalid values
+- Exhaustive match checking
+- IDE autocomplete
+- Refactoring support (rename finds all usages)
+- Self-documenting code
+
+**Tradeoff:**
+- Less flexible for dynamic/user-defined values
+- Requires updating enum for new values
+
+### When to Use Each Approach
+
+| Approach | Use When | Benefits | Drawbacks |
+|----------|----------|----------|-----------|
+| **Magic Strings** | Never in production | Quick prototyping | No safety, typo-prone |
+| **Constants** | Semi-dynamic values, external API | Flexible, clear, validated | Runtime validation needed |
+| **Enums** | Fixed set of values you control | Compile-time safety, refactorable | Less flexible |
+
+### Rule
+**Never use magic strings for validation. Use constants for semi-dynamic values and enums for fixed value sets you control. This catches typos at compile time and makes code more maintainable.**
+
+### Validation with Helpful Errors
+
+```rust
+// ❌ BAD - Unhelpful error
+if hook.r#type != "command" {
+    anyhow::bail!("Invalid hook type");
+}
+
+// ✅ GOOD - Helpful error with context
+if !VALID_HOOK_TYPES.contains(&hook.r#type.as_str()) {
+    anyhow::bail!(
+        "Unknown hook type '{}' in {} event. Valid types: {}",
+        hook.r#type,
+        event,
+        VALID_HOOK_TYPES.join(", ")
+    );
+}
+```
+
+---
+
+## CLI User Feedback for File Operations
+
+### Problem
+Silent file operations leave users confused about what actually happened. This is especially problematic for operations that create, modify, or delete files.
+
+### Example - settings_manager.rs (Phase 2.6)
+
+```rust
+// ❌ WRONG - Silent file creation
+Commands::AddHook { path, event, command, .. } => {
+    // Load existing settings or create new
+    let mut settings = ClaudeSettings::read(&path).unwrap_or_default();
+
+    settings.add_hook(&event, hook_config);
+    settings.write(&path)?;  // Did we create? Did we modify? User has no idea!
+
+    println!("✅ Hook added");  // Incomplete feedback
+}
+```
+
+**Problems:**
+- User doesn't know if file was created or modified
+- No confirmation of the file location
+- Can't tell if operation was a no-op (hook already existed)
+- Silent failures might go unnoticed
+
+### Solution - Inform Users of Actions
+
+```rust
+// ✅ CORRECT - Clear feedback about what happened
+Commands::AddHook { path, event, command, matcher, dry_run } => {
+    let file_existed = path.exists();
+
+    // Load existing settings or create new
+    let mut settings = if file_existed {
+        ClaudeSettings::read(&path)?
+    } else {
+        println!("📝 Creating new settings file: {}", path.display());
+        ClaudeSettings::default()
+    };
+
+    let hook_config = HookConfig {
+        matcher,
+        hooks: vec![Hook {
+            r#type: HOOK_TYPE_COMMAND.to_string(),
+            command,
+        }],
+    };
+
+    settings.add_hook(&event, hook_config);
+    settings.validate()?;
+
+    if dry_run {
+        println!("🔍 Dry run - would write to: {}", path.display());
+        println!("{}", serde_json::to_string_pretty(&settings)?);
+    } else {
+        settings.write(&path)?;
+
+        if file_existed {
+            println!("✅ Hook added to existing file: {}", path.display());
+        } else {
+            println!("✅ Created new settings file with hook: {}", path.display());
+        }
+
+        println!("   Event: {}", event);
+        println!("   Command: {}", hook_config.hooks[0].command);
+    }
+
+    Ok(())
+}
+```
+
+### Feedback Levels
+
+**Minimal (quiet mode):**
+```rust
+// Just success/failure
+println!("✅ Hook added");
+```
+
+**Standard (default):**
+```rust
+// What happened and where
+println!("✅ Hook added to {}", path.display());
+println!("   Event: {}", event);
+```
+
+**Verbose (--verbose flag):**
+```rust
+// Everything that happened
+println!("📝 Loading settings from {}", path.display());
+println!("✅ Hook added successfully");
+println!("   Event: {}", event);
+println!("   Command: {}", command);
+println!("   File size: {} bytes", metadata.len());
+```
+
+### File Operation Feedback Patterns
+
+**Creating files:**
+```rust
+if !path.exists() {
+    println!("📝 Creating new file: {}", path.display());
+}
+fs::write(&path, content)?;
+println!("✅ Created {}", path.display());
+```
+
+**Modifying files:**
+```rust
+if path.exists() {
+    println!("📝 Updating existing file: {}", path.display());
+} else {
+    println!("📝 Creating new file: {}", path.display());
+}
+fs::write(&path, content)?;
+println!("✅ Saved changes to {}", path.display());
+```
+
+**Deleting files:**
+```rust
+if path.exists() {
+    println!("🗑️  Removing: {}", path.display());
+    fs::remove_file(&path)?;
+    println!("✅ Deleted");
+} else {
+    println!("ℹ️  File doesn't exist (nothing to delete): {}", path.display());
+}
+```
+
+**Reading files:**
+```rust
+// For verbose mode
+println!("📖 Reading: {}", path.display());
+let content = fs::read_to_string(&path)?;
+println!("✅ Loaded {} bytes", content.len());
+```
+
+### Interactive Confirmations
+
+For destructive operations, ask for confirmation:
+
+```rust
+use std::io::{self, Write};
+
+fn confirm_overwrite(path: &Path) -> Result<bool> {
+    print!("File {} already exists. Overwrite? [y/N] ", path.display());
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    Ok(input.trim().to_lowercase() == "y")
+}
+
+// Usage:
+if path.exists() && !confirm_overwrite(&path)? {
+    println!("❌ Operation cancelled");
+    return Ok(());
+}
+```
+
+### Summary Messages
+
+For operations that affect multiple files:
+
+```rust
+println!("\n📊 Summary:");
+println!("   Files created: {}", created_count);
+println!("   Files modified: {}", modified_count);
+println!("   Files skipped: {}", skipped_count);
+if failed_count > 0 {
+    println!("   ⚠️  Files failed: {}", failed_count);
+}
+```
+
+### Rule
+**Always inform users about file operations. Tell them what happened (created/modified/deleted), where it happened (file path), and whether it succeeded. Use emojis and colors to make feedback scannable.**
+
+### User Feedback Checklist
+
+For CLI file operations:
+- [ ] Inform when creating new files vs modifying existing
+- [ ] Show file paths so users know where files went
+- [ ] Provide summary of what changed
+- [ ] Use visual indicators (✅ ❌ 📝 🗑️ ⚠️) for quick scanning
+- [ ] Confirm destructive operations (delete, overwrite)
+- [ ] Show dry-run results before actual changes
+- [ ] Include relevant details (event, command, etc.) in output
+
+---
+
 ## Checklist Before Submitting PR
 
 Use this checklist to catch common issues before code review:
@@ -1248,6 +1644,7 @@ Use this checklist to catch common issues before code review:
 - [ ] No `.unwrap()` on `Path` operations (`file_name()`, `parent()`, `extension()`)
 - [ ] No duplicated conditional logic
 - [ ] Loop-invariant computations moved outside loops
+- [ ] No magic strings - use constants or enums for validation
 
 **File I/O:**
 - [ ] File writes use atomic write pattern (temp file + rename)
@@ -1256,7 +1653,9 @@ Use this checklist to catch common issues before code review:
 
 **CLI/UX:**
 - [ ] Colored output checks both `NO_COLOR` AND `io::stdout().is_terminal()`
-- [ ] Error messages are helpful and actionable
+- [ ] Error messages are helpful and actionable (show valid options)
+- [ ] File operations inform users (created vs modified, file path)
+- [ ] Destructive operations have confirmations (or --force flag)
 
 **Testing & CI:**
 - [ ] Run `cargo clippy -- -D warnings` (treats warnings as errors)
