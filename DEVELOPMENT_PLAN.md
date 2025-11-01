@@ -15,6 +15,423 @@ This plan addresses code quality improvements identified during the Rust best pr
 
 ---
 
+## Phase 0: CI/CD Foundation 🔵
+
+**Goal:** Establish automated quality gates for all future development
+**Priority:** CRITICAL - Must be completed FIRST
+**Timeline:** Complete before any other phases begin
+
+**Why First:**
+- ✅ Catches issues immediately in all future PRs
+- ✅ Enforces code quality from day 1
+- ✅ Validates cross-platform compatibility (Linux/macOS/Windows)
+- ✅ Prevents Phase 1+ work from breaking builds on other platforms
+- ✅ Fast feedback loop for developers
+- ✅ Documents exactly how to build/test the project
+
+### 0.1 Setup GitHub Actions CI Workflow
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 1 hour
+
+**Tasks:**
+
+- [ ] Create `.github/workflows/` directory
+- [ ] Create `ci.yml` workflow file
+- [ ] Configure matrix build (Linux, macOS, Windows)
+- [ ] Add Rust stable toolchain setup
+- [ ] Add formatting check (`cargo fmt --check`)
+- [ ] Add linting check (`cargo clippy`)
+- [ ] Add build step (`cargo build`)
+- [ ] Add test step (`cargo test`)
+- [ ] Add platform-specific install script tests
+- [ ] Configure to run on push to main and all PRs
+- [ ] Add status badge to README.md
+
+**Implementation:**
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy (lint)
+        run: cargo clippy --workspace --all-features -- -D warnings
+
+      - name: Build (debug)
+        run: cargo build --workspace --all-features
+
+      - name: Build (release)
+        run: cargo build --workspace --all-features --release
+
+      - name: Run tests
+        run: cargo test --workspace --all-features
+
+      - name: Test install script (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x install.sh
+          ./install.sh --help
+
+      - name: Test install script (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\install.ps1 -Help
+```
+
+**Status Badge for README.md:**
+
+```markdown
+[![CI](https://github.com/YOUR_USERNAME/catalyst/workflows/CI/badge.svg)](https://github.com/YOUR_USERNAME/catalyst/actions)
+```
+
+**Quality Gates Enforced by CI:**
+
+- ✅ Code must be formatted (`cargo fmt`)
+- ✅ Zero clippy warnings (`clippy -D warnings`)
+- ✅ All builds succeed on Linux, macOS, Windows
+- ✅ All tests pass on all platforms
+- ✅ Install scripts run without errors
+
+**Verification:**
+
+```bash
+# Locally verify CI will pass before pushing
+
+# 1. Check formatting
+cargo fmt --all -- --check
+
+# 2. Check clippy
+cargo clippy --workspace --all-features -- -D warnings
+
+# 3. Run tests
+cargo test --workspace --all-features
+
+# 4. Build release
+cargo build --workspace --all-features --release
+
+# 5. Test install script
+./install.sh --help  # or install.ps1 -Help on Windows
+```
+
+**Files to Create:**
+
+- `.github/workflows/ci.yml`
+
+**Files to Modify:**
+
+- `README.md` - Add CI status badge at top
+
+**CI Run Time:** ~5-8 minutes per platform (15-24 min total for matrix)
+
+**Benefits:**
+
+- 🚫 **Prevents merging broken code** - PRs must pass CI
+- ⚡ **Fast feedback** - Know within minutes if changes break anything
+- 🔒 **Enforces standards** - Formatting and linting are automatic
+- 🌍 **Cross-platform validation** - Windows/Mac/Linux tested on every commit
+- 📊 **Visibility** - Status badge shows build health at a glance
+- 📝 **Documentation** - CI workflow documents build/test process
+
+**Post-Implementation:**
+
+After Phase 0 is complete, ALL subsequent phases will be validated by CI:
+- Phase 1 fixes will be tested on all platforms automatically
+- Phase 2 refactoring won't break existing functionality (tests catch regressions)
+- Phase 3 polish will maintain quality gates
+
+---
+
+## Project Architecture Decision
+
+**Decision:** Cargo workspace with separate crates for library and binaries
+
+**Date:** 2025-10-31
+
+### Structure
+
+```
+catalyst/
+├── Cargo.toml                    # Workspace root
+├── Cargo.lock                    # Shared lock file
+├── install.sh                    # Unix installer
+├── install.ps1                   # Windows installer
+├── README.md
+├── LICENSE
+├── DEVELOPMENT_PLAN.md
+│
+├── catalyst-core/                # Shared library crate
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs               # Library root
+│       ├── settings.rs          # Settings.json management (Phase 2.6)
+│       └── utils.rs             # Shared utilities (future)
+│
+└── catalyst-cli/                 # Binary crate
+    ├── Cargo.toml
+    └── src/
+        └── bin/
+            ├── skill_activation_prompt.rs
+            ├── file_analyzer.rs
+            ├── post_tool_use_tracker_sqlite.rs
+            └── settings_manager.rs       # Uses catalyst-core::settings
+```
+
+### Workspace Root Cargo.toml
+
+```toml
+[workspace]
+members = [
+    "catalyst-core",
+    "catalyst-cli",
+]
+
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Catalyst Contributors"]
+license = "MIT"
+repository = "https://github.com/dwalleck/catalyst"
+
+[workspace.dependencies]
+# Shared dependencies available to all workspace members
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+```
+
+### catalyst-core/Cargo.toml
+
+```toml
+[package]
+name = "catalyst-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Phase 2.6: Settings management
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+# Phase 2.2: Unit tests
+```
+
+### catalyst-cli/Cargo.toml
+
+```toml
+[package]
+name = "catalyst-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Import core library
+catalyst-core = { path = "../catalyst-core" }
+
+# CLI-specific dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+walkdir = "2.4"
+once_cell = "1.19"            # Phase 1.3
+
+# Phase 2.4: CLI improvements
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "2.1"
+
+# Phase 2.5: Performance optimizations
+ignore = "0.4"
+globset = "0.4"
+unicase = "2.7"
+
+# Optional features
+rayon = { version = "1.8", optional = true }
+aho-corasick = { version = "1.1", optional = true }
+indicatif = { version = "0.17", optional = true }
+
+# SQLite feature
+rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+chrono = { version = "0.4", optional = true }
+
+[features]
+default = []
+sqlite = ["dep:rusqlite", "dep:chrono"]
+parallel = ["dep:rayon"]
+fast-patterns = ["dep:aho-corasick"]
+progress = ["dep:indicatif"]
+
+# Binary definitions
+[[bin]]
+name = "skill-activation-prompt"
+path = "src/bin/skill_activation_prompt.rs"
+
+[[bin]]
+name = "file-analyzer"
+path = "src/bin/file_analyzer.rs"
+
+[[bin]]
+name = "post-tool-use-tracker-sqlite"
+path = "src/bin/post_tool_use_tracker_sqlite.rs"
+required-features = ["sqlite"]
+
+[[bin]]
+name = "settings-manager"
+path = "src/bin/settings_manager.rs"
+```
+
+### Rationale
+
+**Why Workspace?**
+- ✅ **Code reuse** - Settings module shared between binaries
+- ✅ **Clear separation** - Library (core) vs executables (CLI)
+- ✅ **Better testing** - Can test core library independently
+- ✅ **Future flexibility** - Easy to add new crates (e.g., catalyst-web for API)
+- ✅ **Dependency management** - Workspace dependencies ensure version consistency
+- ✅ **CI efficiency** - `cargo test --workspace` tests everything
+
+**Why Two Crates?**
+- `catalyst-core` - Reusable library code (settings, utils)
+- `catalyst-cli` - Command-line tools that use core
+
+**Alternative Considered (Rejected):**
+- ❌ Binaries only (no lib) - Can't share code between binaries cleanly
+- ❌ Monolithic lib + bins in one crate - Harder to test core separately
+
+### Migration from Current Structure
+
+Current files will be reorganized:
+
+**Files moving to catalyst-cli/src/bin/:**
+- `src/bin/skill_activation_prompt.rs` → `catalyst-cli/src/bin/skill_activation_prompt.rs`
+- `src/bin/file_analyzer.rs` → `catalyst-cli/src/bin/file_analyzer.rs`
+- `src/bin/post_tool_use_tracker_sqlite.rs` → `catalyst-cli/src/bin/post_tool_use_tracker_sqlite.rs`
+
+**New files in catalyst-core/src/:**
+- `lib.rs` - Library root, exports modules
+- `settings.rs` - Settings management (Phase 2.6)
+
+**Cargo.toml changes:**
+- Current `Cargo.toml` → `catalyst-cli/Cargo.toml` (with modifications)
+- New `Cargo.toml` at root (workspace)
+- New `catalyst-core/Cargo.toml`
+
+### Implementation Notes
+
+- Workspace setup should be done as **Phase 0.2** (after CI, before Phase 1)
+- All imports need updating: `use catalyst_core::settings;`
+- CI will automatically test all workspace members
+- Building: `cargo build --workspace` builds all crates
+- Testing: `cargo test --workspace` tests all crates
+
+**Phase Dependencies:**
+- Phase 2.6 (Settings) will create `catalyst-core/src/settings.rs`
+- Phase 2.6 (Settings Manager binary) will use `catalyst_core::settings`
+- All other binaries remain independent unless they need shared code
+
+---
+
+## Dependency Graph
+
+This shows the execution order for all phases:
+
+```
+Phase 0: CI/CD Foundation
+    ↓
+Phase 0.2: Setup Workspace Structure [NEW]
+    ↓
+Phase 1.1 → 1.2 → 1.3 (Sequential - each builds on previous)
+    ↓
+Phase 2.1 (Documentation) ║
+Phase 2.3 (Traits)        ║ ← Can run in parallel
+    ↓
+Phase 2.3a: Cross-Platform Path Handling [NEW]
+    ↓                      (Must complete before 2.4-2.7)
+    ↓
+Phase 2.4 (CLI + Windows) ║
+Phase 2.5 (Performance)   ║ ← Can run in parallel
+Phase 2.6 (Settings)      ║    (each has Windows subsection)
+    ↓
+Phase 2.7: Windows-Specific Components
+    ↓
+Phase 2.2: Unit Tests (After all refactoring complete)
+    ↓
+Phase 3.1 → 3.2 → 3.3 → 3.4 → 3.5 (Any order, CI catches issues)
+```
+
+**Critical Path:**
+```
+Phase 0 → Phase 0.2 → Phase 1.x → Phase 2.3a → {Phase 2.4, 2.5, 2.6} → Phase 2.7 → Phase 2.2
+```
+
+**CI Validation:**
+- Every phase must pass CI before merging
+- Workspace changes validated on all platforms
+- Breaking changes caught immediately
+
+---
+
 ## Phase 1: Critical Issues 🔴
 
 **Goal:** Fix issues that prevent clean compilation and introduce security risks
@@ -28,6 +445,7 @@ This plan addresses code quality improvements identified during the Rust best pr
 **Effort:** 30 minutes
 
 **Tasks:**
+
 - [ ] Remove unused import `Read` from `file_analyzer.rs:4`
 - [ ] Remove unused import `Serialize` from `skill_activation_prompt.rs:1`
 - [ ] Remove unused import `std::path::Path` from `post_tool_use_tracker_sqlite.rs:9`
@@ -40,12 +458,14 @@ This plan addresses code quality improvements identified during the Rust best pr
 - [ ] Prefix unused parameter with underscore: `_tool` in `post_tool_use_tracker_sqlite.rs:243`
 
 **Verification:**
+
 ```bash
 cargo clippy --all-features -- -D warnings
 # Should pass with 0 errors
 ```
 
 **Files to Modify:**
+
 - `src/bin/skill_activation_prompt.rs`
 - `src/bin/file_analyzer.rs`
 - `src/bin/post_tool_use_tracker_sqlite.rs`
@@ -61,6 +481,7 @@ cargo clippy --all-features -- -D warnings
 **Issue:** Dynamic SQL construction using string interpolation in `post_tool_use_tracker_sqlite.rs:156-162`
 
 **Current Code:**
+
 ```rust
 &format!(
     "UPDATE sessions
@@ -72,12 +493,14 @@ cargo clippy --all-features -- -D warnings
 ```
 
 **Tasks:**
+
 - [ ] Replace `format!()` with explicit match on `category`
 - [ ] Use const SQL strings for each category variant
 - [ ] Add comment explaining why this approach is safe
 - [ ] Verify all SQL uses parameterized queries
 
 **Solution Pattern:**
+
 ```rust
 let sql = match category {
     "backend" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, backend_files = backend_files + 1 WHERE session_id = ?2",
@@ -90,11 +513,13 @@ self.conn.execute(sql, params![&now, session_id])?;
 ```
 
 **Verification:**
+
 - [ ] Manual code review - no string interpolation in SQL
 - [ ] Test with various category values
 - [ ] Run with `DEBUG_HOOKS=1` to verify behavior
 
 **Files to Modify:**
+
 - `src/bin/post_tool_use_tracker_sqlite.rs`
 
 ---
@@ -108,6 +533,7 @@ self.conn.execute(sql, params![&now, session_id])?;
 **Issue:** Regexes compiled on every function call (performance penalty)
 
 **Tasks:**
+
 - [ ] Add `once_cell` to dependencies in `Cargo.toml`
 - [ ] Create lazy static regexes in `file_analyzer.rs`
 - [ ] Create lazy static regexes in `post_tool_use_tracker_sqlite.rs`
@@ -115,6 +541,7 @@ self.conn.execute(sql, params![&now, session_id])?;
 - [ ] Benchmark before/after (optional but recommended)
 
 **Implementation:**
+
 ```rust
 use once_cell::sync::Lazy;
 
@@ -131,6 +558,7 @@ static ASYNC_REGEX: Lazy<Regex> = Lazy::new(|| {
 ```
 
 **Verification:**
+
 ```bash
 # Benchmark (optional)
 hyperfine './target/release/file-analyzer test-data/'
@@ -139,6 +567,7 @@ hyperfine './target/release/file-analyzer test-data/'
 ```
 
 **Files to Modify:**
+
 - `Cargo.toml` - add `once_cell = "1.19"`
 - `src/bin/file_analyzer.rs`
 - `src/bin/post_tool_use_tracker_sqlite.rs`
@@ -158,6 +587,7 @@ hyperfine './target/release/file-analyzer test-data/'
 **Effort:** 2-3 hours
 
 **Tasks:**
+
 - [ ] Document `main()` function in `skill_activation_prompt.rs`
   - [ ] Purpose
   - [ ] Input format (JSON schema)
@@ -181,6 +611,7 @@ hyperfine './target/release/file-analyzer test-data/'
 - [ ] Document all structs with examples
 
 **Documentation Template:**
+
 ```rust
 /// Analyzes user prompts and suggests relevant Claude Code skills.
 ///
@@ -223,12 +654,14 @@ fn main() -> io::Result<()> {
 ```
 
 **Verification:**
+
 ```bash
 cargo doc --all-features --no-deps --open
 # Should see well-formatted documentation
 ```
 
 **Files to Modify:**
+
 - All files in `src/bin/`
 
 ---
@@ -242,6 +675,7 @@ cargo doc --all-features --no-deps --open
 **Tasks:**
 
 #### `skill_activation_prompt.rs` Tests
+
 - [ ] Test keyword matching (case-insensitive)
 - [ ] Test intent pattern matching (regex)
 - [ ] Test priority grouping (critical/high/medium/low)
@@ -249,6 +683,7 @@ cargo doc --all-features --no-deps --open
 - [ ] Test malformed JSON input (error handling)
 
 #### `file_analyzer.rs` Tests
+
 - [ ] Test `get_file_category()` with various paths
   - [ ] Frontend paths
   - [ ] Backend paths
@@ -266,6 +701,7 @@ cargo doc --all-features --no-deps --open
   - [ ] API call detection
 
 #### `post_tool_use_tracker_sqlite.rs` Tests
+
 - [ ] Test database creation
 - [ ] Test file modification tracking
 - [ ] Test session summary updates
@@ -274,6 +710,7 @@ cargo doc --all-features --no-deps --open
 - [ ] Test concurrent access (if applicable)
 
 **Test Structure:**
+
 ```rust
 #[cfg(test)]
 mod tests {
@@ -314,6 +751,7 @@ mod tests {
 ```
 
 **Verification:**
+
 ```bash
 cargo test --all-features
 # All tests should pass
@@ -323,6 +761,7 @@ cargo test --all-features -- --nocapture
 ```
 
 **Files to Modify:**
+
 - All files in `src/bin/` (add test modules)
 
 ---
@@ -334,12 +773,14 @@ cargo test --all-features -- --nocapture
 **Effort:** 1 hour
 
 **Tasks:**
+
 - [ ] Add `Clone` to deserializable structs
 - [ ] Add `PartialEq` where equality makes sense
 - [ ] Add `Eq` + `Hash` for types used in collections
 - [ ] Consider `Default` for initialization patterns
 
 **Implementation:**
+
 ```rust
 // Before
 #[derive(Debug, Deserialize)]
@@ -359,6 +800,7 @@ struct MatchedSkill {
 ```
 
 **Checklist:**
+
 - [ ] `HookInput` - Add `Clone`, `PartialEq`
 - [ ] `PromptTriggers` - Add `Clone`, `PartialEq`
 - [ ] `SkillRule` - Add `Clone`, `PartialEq`
@@ -368,13 +810,275 @@ struct MatchedSkill {
 - [ ] `Stats` - Add `Clone`, `PartialEq`
 
 **Verification:**
+
 ```bash
 cargo check --all-features
 # Should compile without issues
 ```
 
 **Files to Modify:**
-- All files in `src/bin/`
+
+- All files in `catalyst-cli/src/bin/`
+
+---
+
+### 2.3a Cross-Platform Path Handling
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 2-3 hours
+
+**Issue:** Consolidate ALL path handling refactoring for cross-platform compatibility (Windows/Linux/macOS). This was previously split between Phase 2.5 and 2.7, causing duplication.
+
+**Current Problems:**
+
+1. **String concatenation instead of Path methods**
+```rust
+// ❌ Current (Unix-only)
+let rules_path = format!("{project_dir}/.claude/skills/skill-rules.json");
+
+// ✅ Fixed (Cross-platform)
+let rules_path = project_dir
+    .join(".claude")
+    .join("skills")
+    .join("skill-rules.json");
+```
+
+2. **String contains for path detection**
+```rust
+// ❌ Current (Unix-only)
+if path.contains("/frontend/") || path.contains("/client/") { ... }
+
+// ✅ Fixed (Cross-platform)
+fn get_file_category(path: &Path) -> &'static str {
+    for component in path.components() {
+        match component.as_os_str().to_str() {
+            Some("frontend") | Some("client") => return "frontend",
+            Some("backend") | Some("server") => return "backend",
+            _ => continue,
+        }
+    }
+    "other"
+}
+```
+
+3. **Hardcoded Unix environment variables**
+```rust
+// ❌ Current
+env::var("HOME")
+
+// ✅ Fixed
+fn get_home_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        env::var("USERPROFILE")
+            .or_else(|_| env::var("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Default"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    }
+}
+```
+
+---
+
+**Tasks:**
+
+#### Update All Binaries
+
+- [ ] **skill_activation_prompt.rs**
+  - [ ] Use `PathBuf` for `CLAUDE_PROJECT_DIR`
+  - [ ] Use `path.join()` for rules_path construction
+  - [ ] Change function signatures: `&str` → `&Path` where appropriate
+
+- [ ] **file_analyzer.rs**
+  - [ ] Change `get_file_category(path: &str)` → `get_file_category(path: &Path)`
+  - [ ] Use `path.components()` instead of string contains
+  - [ ] Use `path.extension()` instead of string `ends_with()`
+  - [ ] Update `should_analyze()` to use Path methods
+
+- [ ] **post_tool_use_tracker_sqlite.rs**
+  - [ ] Use Path for file path parameters
+  - [ ] Use `path.components()` for category detection
+  - [ ] Cross-platform database path construction
+
+#### Add Cross-Platform Helper Functions
+
+- [ ] Create `get_home_dir()` function (handles HOME vs USERPROFILE)
+- [ ] Create `get_claude_hooks_dir()` function
+- [ ] Create `normalize_path()` if needed (handle both `/` and `\` in input)
+
+#### Test on All Platforms
+
+- [ ] Verify builds on Linux
+- [ ] Verify builds on macOS
+- [ ] Verify builds on Windows
+- [ ] Test with backslash paths (Windows)
+- [ ] Test with forward slash paths (Unix)
+- [ ] Test with spaces in paths (Program Files)
+- [ ] Test with UNC paths (`\\server\share\`)
+
+---
+
+**Implementation Examples:**
+
+```rust
+// catalyst-cli/src/bin/skill_activation_prompt.rs
+
+use std::path::{Path, PathBuf};
+use std::env;
+
+fn main() -> io::Result<()> {
+    // Cross-platform project directory
+    let project_dir = env::var("CLAUDE_PROJECT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+
+    // Cross-platform path construction
+    let rules_path = project_dir
+        .join(".claude")
+        .join("skills")
+        .join("skill-rules.json");
+
+    let rules_content = fs::read_to_string(&rules_path)?;
+    // ... rest of code
+}
+```
+
+```rust
+// catalyst-cli/src/bin/file_analyzer.rs
+
+use std::path::{Path, PathBuf};
+
+// Change from &str to &Path
+fn get_file_category(path: &Path) -> &'static str {
+    // Use path components instead of string contains
+    for component in path.components() {
+        match component.as_os_str().to_str() {
+            Some("frontend") | Some("client") | Some("components") => {
+                return "frontend";
+            }
+            Some("backend") | Some("server") | Some("api") | Some("controllers") => {
+                return "backend";
+            }
+            Some("database") | Some("prisma") | Some("migrations") => {
+                return "database";
+            }
+            _ => continue,
+        }
+    }
+    "other"
+}
+
+// Use Path extension method
+fn should_analyze(path: &Path) -> bool {
+    // Check extension using Path API
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("ts") | Some("tsx") | Some("js") | Some("jsx") | Some("rs") | Some("cs") => {
+            // Skip test files
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                !file_name.contains(".test.") && !file_name.contains(".spec.")
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+```
+
+```rust
+// Cross-platform home directory helper
+
+use std::path::PathBuf;
+use std::env;
+
+#[cfg(windows)]
+fn get_home_dir() -> PathBuf {
+    env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Default"))
+}
+
+#[cfg(not(windows))]
+fn get_home_dir() -> PathBuf {
+    env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
+
+fn get_claude_hooks_dir() -> PathBuf {
+    get_home_dir()
+        .join(".claude-hooks")
+        .join("bin")
+}
+```
+
+---
+
+**Verification:**
+
+```bash
+# Local testing (all platforms)
+cargo build --workspace --all-features
+cargo test --workspace --all-features
+
+# Test with Windows-style paths (on Windows)
+set CLAUDE_PROJECT_DIR=C:\Users\test\project
+.\target\release\skill-activation-prompt.exe < test-input.json
+
+# Test with Unix-style paths (on Linux/macOS)
+export CLAUDE_PROJECT_DIR=/home/test/project
+./target/release/skill-activation-prompt < test-input.json
+
+# CI will automatically test all platforms
+git push  # CI runs on Linux, macOS, Windows
+```
+
+**Windows-Specific Testing:**
+
+```powershell
+# Test with spaces in path
+$env:CLAUDE_PROJECT_DIR = "C:\Program Files\My Project"
+.\target\release\skill-activation-prompt.exe < test.json
+
+# Test with UNC path
+$env:CLAUDE_PROJECT_DIR = "\\server\share\project"
+.\target\release\skill-activation-prompt.exe < test.json
+
+# Test file-analyzer with Windows paths
+.\target\release\file-analyzer.exe "C:\Users\test\project"
+```
+
+---
+
+**Files to Modify:**
+
+- `catalyst-cli/src/bin/skill_activation_prompt.rs`
+- `catalyst-cli/src/bin/file_analyzer.rs`
+- `catalyst-cli/src/bin/post_tool_use_tracker_sqlite.rs`
+
+**CI Validation:**
+
+- ✅ Build succeeds on Windows, macOS, Linux
+- ✅ Tests pass with different path formats
+- ✅ Clippy passes (no path-related warnings)
+
+**Priority:** HIGH - Must be done before Phase 2.4, 2.5, 2.6, 2.7 (blocks Windows work)
+
+**Why Before Other Phases:**
+
+- Phase 2.4 (CLI) will add new path handling - needs this foundation
+- Phase 2.5 (Performance) uses ignore/globset with paths - needs Path API
+- Phase 2.6 (Settings) will work with settings.json paths - needs this
+- Phase 2.7 (Windows) needs all paths already working cross-platform
 
 ---
 
@@ -387,6 +1091,7 @@ cargo check --all-features
 **Issue:** Currently using manual argument parsing and basic error handling. Modern CLI crates would improve UX significantly.
 
 **Current Problems:**
+
 - Manual `env::args()` parsing in `file-analyzer.rs`
 - No automatic `--help` generation
 - Manual DEBUG_HOOKS env var checking
@@ -396,43 +1101,53 @@ cargo check --all-features
 **Recommended Crates:**
 
 #### Must-Have: `clap` (argument parsing)
+
 **Why:** Better than manual `env::args()` parsing
 
 **Benefits:**
+
 - ✅ Automatic `--help` and `--version`
 - ✅ Type-safe argument parsing
 - ✅ Built-in validation
 - ✅ Shell completion generation
 
 #### Must-Have: `anyhow` (error handling)
+
 **Why:** Already using in SQLite, should use everywhere
 
 **Benefits:**
+
 - ✅ `.context()` for helpful error messages
 - ✅ No manual error type conversion
 - ✅ Stack traces in debug mode
 
 #### Recommended: `tracing` (structured logging)
+
 **Why:** Better than manual `DEBUG_HOOKS` checking
 
 **Benefits:**
+
 - ✅ Structured logging (not just strings)
 - ✅ Log levels (debug, info, warn, error)
 - ✅ Controlled by `RUST_LOG=debug` env var
 - ✅ Can output JSON for parsing
 
 #### Nice-to-Have: `colored` (terminal colors)
+
 **Why:** Visual hierarchy improves readability
 
 **Benefits:**
+
 - ✅ Better visual output
 - ✅ Respects `NO_COLOR` env var
 - ✅ Cross-platform (Windows/Unix)
 
 #### Nice-to-Have: `indicatif` (progress bars)
+
 **Why:** Feedback for long operations
 
 **Benefits:**
+
 - ✅ Shows progress during large scans
 - ✅ Automatically hides when piped
 - ✅ Estimated time remaining
@@ -440,6 +1155,7 @@ cargo check --all-features
 **Tasks:**
 
 #### Add Dependencies
+
 - [ ] Add `clap = { version = "4.5", features = ["derive"] }` to Cargo.toml
 - [ ] Add `anyhow = "1.0"` to core dependencies (not just SQLite feature)
 - [ ] Add `tracing = "0.1"` to dependencies
@@ -448,6 +1164,7 @@ cargo check --all-features
 - [ ] Add `indicatif = { version = "0.17", optional = true }` with feature flag
 
 #### Update `file-analyzer.rs`
+
 - [ ] Replace manual args parsing with `clap::Parser` derive
 - [ ] Add `--verbose`, `--format`, `--no-color` flags
 - [ ] Change `main()` return type to `anyhow::Result<()>`
@@ -458,6 +1175,7 @@ cargo check --all-features
 - [ ] Add optional progress bar for large directories
 
 #### Update `skill-activation-prompt.rs`
+
 - [ ] Change return type from `io::Result<()>` to `anyhow::Result<()>`
 - [ ] Add `.context()` for JSON parsing errors
 - [ ] Add `.context()` for file reading errors
@@ -465,6 +1183,7 @@ cargo check --all-features
 - [ ] Add tracing for debugging
 
 #### Update `post-tool-use-tracker-sqlite.rs`
+
 - [ ] Already using `anyhow::Result` ✅
 - [ ] Replace manual `DEBUG_HOOKS` check with `tracing::debug!`
 - [ ] Add structured logging with fields
@@ -550,6 +1269,7 @@ debug!(file_path = %file_path, category = %category, "Tracked file modification"
 ```
 
 **Updated Cargo.toml:**
+
 ```toml
 [dependencies]
 # Core dependencies
@@ -580,6 +1300,7 @@ progress = ["dep:indicatif"]  # Optional feature for progress bars
 ```
 
 **Verification:**
+
 ```bash
 # Test new CLI arguments
 ./target/release/file-analyzer --help
@@ -604,6 +1325,7 @@ NO_COLOR=1 ./target/release/file-analyzer /path
 ```
 
 **Files to Modify:**
+
 - `Cargo.toml` - Add new dependencies
 - `src/bin/skill_activation_prompt.rs` - Add tracing, anyhow, colored
 - `src/bin/file_analyzer.rs` - Add clap, tracing, anyhow, colored
@@ -612,6 +1334,7 @@ NO_COLOR=1 ./target/release/file-analyzer /path
 **Example Output (Before vs After):**
 
 Before:
+
 ```
 Usage: file-analyzer <directory>
 
@@ -619,6 +1342,7 @@ Analyzes files in directory for error-prone patterns
 ```
 
 After:
+
 ```
 $ file-analyzer --help
 Analyzes files for error-prone patterns
@@ -637,6 +1361,7 @@ Options:
 ```
 
 **Benefits:**
+
 - ✅ Professional CLI interface
 - ✅ Better error messages with context
 - ✅ Structured logging that can be disabled
@@ -649,21 +1374,21 @@ Options:
 
 ---
 
-### 2.5 Optimize String/Path/Pattern Operations
+### 2.5 Performance Optimizations
 
 **Status:** ❌ Not Started
 **Assignee:** TBD
 **Effort:** 2-3 hours
 
-**Issue:** Current code does inefficient string operations, allocations, and path handling.
+**Issue:** Current code has performance bottlenecks in string operations, directory traversal, and pattern matching.
+
+**Prerequisites:** Phase 2.3a (Cross-Platform Path Handling) must be complete first.
 
 **Current Problems:**
 
 #### 1. Excessive `to_lowercase()` Allocations
-```rust
-// file_analyzer.rs:43
-let path_lower = path.to_lowercase();  // Allocates new String
 
+```rust
 // skill_activation_prompt.rs:55,73
 let prompt = data.prompt.to_lowercase();  // Allocates
 let keyword_match = triggers.keywords.iter()
@@ -672,62 +1397,80 @@ let keyword_match = triggers.keywords.iter()
 
 **Problem:** Each `to_lowercase()` allocates a new String. For 100 keywords, that's 100+ allocations.
 
-#### 2. String-based Path Operations
-```rust
-// Using string contains instead of Path methods
-if path.contains("/frontend/")
-    || path.contains("/client/")
-    || path.contains("/src/components/") { ... }
+**Solution:** Use `unicase` crate for zero-allocation case-insensitive comparison.
 
-if path_lower.ends_with(".ts")
-    || path_lower.ends_with(".tsx") { ... }
-```
+#### 2. No .gitignore Support
 
-**Problem:** String operations don't handle path separators correctly across platforms (Windows uses `\`, Unix uses `/`).
-
-#### 3. Multiple Pattern Checks (Linear Search)
-```rust
-// Checking 6 extensions one by one
-path_lower.ends_with(".ts")
-    || path_lower.ends_with(".tsx")
-    || path_lower.ends_with(".js")
-    || path_lower.ends_with(".jsx")
-    || path_lower.ends_with(".rs")
-    || path_lower.ends_with(".cs")
-```
-
-**Problem:** O(n) linear search, could use a set for O(1) lookup.
-
-#### 4. No .gitignore Support
 ```rust
 for entry in WalkDir::new(dir) { ... }
 ```
 
-**Problem:** Scans `node_modules/`, `.git/`, `target/`, etc. unnecessarily.
+**Problem:** Scans `node_modules/`, `.git/`, `target/`, etc. unnecessarily. Can take 10-100x longer than needed.
 
-#### 5. No Parallel Processing
-Large directory scans are sequential, even though each file analysis is independent.
+**Solution:** Use `ignore` crate which respects .gitignore files (same as ripgrep).
+
+#### 3. Inefficient Extension/Pattern Matching
+
+```rust
+// Checking 6 extensions one by one (O(n))
+path.extension() == Some("ts")
+    || path.extension() == Some("tsx")
+    || path.extension() == Some("js")
+    // ... etc
+```
+
+**Problem:** Linear search through extensions for every file.
+
+**Solution:** Use `globset` crate to compile patterns once, match efficiently.
+
+#### 4. Sequential Directory Traversal
+
+```rust
+for entry in WalkDir::new(dir) {
+    analyze_file(entry.path());  // Sequential, single-threaded
+}
+```
+
+**Problem:** Large directory scans are sequential, even though each file analysis is independent. Only uses 1 CPU core.
+
+**Solution:** Use `rayon` for parallel processing (4-8x faster on multi-core).
+
+#### 5. Multiple Keyword Matching (Linear)
+
+```rust
+// Check each keyword one by one
+triggers.keywords.iter()
+    .any(|kw| prompt.contains(&kw.to_lowercase()))
+```
+
+**Problem:** For N keywords, does N passes through the prompt string.
+
+**Solution:** Use `aho-corasick` for multi-pattern matching (single pass).
 
 ---
 
 **Recommended Crates:**
 
 #### Must-Have: `ignore` crate
+
 **Why:** Respects .gitignore, .ignore files (used by ripgrep)
 
 **Benefits:**
+
 - ✅ Skips node_modules, .git, target automatically
 - ✅ 10-100x faster for large repos
 - ✅ Respects .gitignore patterns
 - ✅ Cross-platform path handling
 
 **Before:**
+
 ```rust
 for entry in WalkDir::new(dir) { ... }
 // Scans everything including node_modules/
 ```
 
 **After:**
+
 ```rust
 use ignore::WalkBuilder;
 
@@ -736,14 +1479,17 @@ for entry in WalkBuilder::new(dir).build() { ... }
 ```
 
 #### Must-Have: `globset` crate
+
 **Why:** Efficient file extension matching
 
 **Benefits:**
+
 - ✅ Compile patterns once
 - ✅ Match multiple patterns efficiently
 - ✅ Cross-platform glob support
 
 **Before:**
+
 ```rust
 path_lower.ends_with(".ts")
     || path_lower.ends_with(".tsx")
@@ -752,6 +1498,7 @@ path_lower.ends_with(".ts")
 ```
 
 **After:**
+
 ```rust
 use globset::{Glob, GlobSetBuilder};
 
@@ -773,14 +1520,17 @@ CODE_EXTENSIONS.is_match(path)
 ```
 
 #### Recommended: `unicase` crate
+
 **Why:** Case-insensitive comparison without allocation
 
 **Benefits:**
+
 - ✅ No `to_lowercase()` allocations
 - ✅ Direct case-insensitive comparison
 - ✅ Works with HashSet/HashMap
 
 **Before:**
+
 ```rust
 let prompt = data.prompt.to_lowercase();  // Allocates
 let keyword_match = triggers.keywords.iter()
@@ -788,6 +1538,7 @@ let keyword_match = triggers.keywords.iter()
 ```
 
 **After:**
+
 ```rust
 use unicase::UniCase;
 
@@ -797,14 +1548,17 @@ let keyword_match = triggers.keywords.iter()
 ```
 
 #### Nice-to-Have: `rayon` crate
+
 **Why:** Parallel iteration for large directories
 
 **Benefits:**
+
 - ✅ Automatic parallelization
 - ✅ 2-8x faster on multi-core systems
 - ✅ Easy to use (just change `.iter()` to `.par_iter()`)
 
 **Before:**
+
 ```rust
 for entry in WalkDir::new(dir) {
     analyze_file(entry.path());  // Sequential
@@ -812,6 +1566,7 @@ for entry in WalkDir::new(dir) {
 ```
 
 **After:**
+
 ```rust
 use rayon::prelude::*;
 
@@ -821,14 +1576,17 @@ entries.par_iter().for_each(|entry| {
 ```
 
 #### Nice-to-Have: `aho-corasick` crate
+
 **Why:** Multi-pattern string matching (better than multiple contains())
 
 **Benefits:**
+
 - ✅ Match multiple keywords in single pass
 - ✅ Much faster than multiple `.contains()` calls
 - ✅ Used by ripgrep for speed
 
 **Before:**
+
 ```rust
 // Checks each keyword one by one
 triggers.keywords.iter()
@@ -836,6 +1594,7 @@ triggers.keywords.iter()
 ```
 
 **After:**
+
 ```rust
 use aho_corasick::AhoCorasick;
 
@@ -851,112 +1610,112 @@ KEYWORD_MATCHER.is_match(&prompt)
 
 **Tasks:**
 
-#### Add Dependencies
-- [ ] Add `ignore = "0.4"` to Cargo.toml (must-have)
-- [ ] Add `globset = "0.4"` to Cargo.toml (must-have)
-- [ ] Add `unicase = "2.7"` to Cargo.toml (recommended)
-- [ ] Add `rayon = "1.8"` to Cargo.toml (optional, feature flag)
-- [ ] Add `aho-corasick = "1.1"` to Cargo.toml (optional)
+#### Add Dependencies to catalyst-cli/Cargo.toml
 
-#### Replace WalkDir with ignore crate
+- [ ] Add `ignore = "0.4"` (must-have - .gitignore support)
+- [ ] Add `globset = "0.4"` (must-have - pattern matching)
+- [ ] Add `unicase = "2.7"` (recommended - zero-alloc comparison)
+- [ ] Add `rayon = "1.8"` (optional - parallel processing)
+- [ ] Add `aho-corasick = "1.1"` (optional - multi-pattern matching)
+
+#### Replace WalkDir with ignore crate (file_analyzer.rs)
+
 - [ ] Replace `WalkDir::new(dir)` with `WalkBuilder::new(dir).build()`
-- [ ] Test that .gitignore is respected
-- [ ] Benchmark performance improvement
+- [ ] Test that .gitignore is respected (skips node_modules/)
+- [ ] Benchmark: Should be 10x faster on repos with node_modules
+- [ ] Add Windows test: Verify respects .gitignore on Windows
 
-#### Use globset for Extension Matching
-- [ ] Create static GlobSet for code file extensions
-- [ ] Replace multiple `ends_with()` checks with `GlobSet::is_match()`
-- [ ] Create GlobSet for test file patterns (.test., .spec.)
+#### Use globset for Extension Matching (file_analyzer.rs)
 
-#### Use Path Methods Instead of String Contains
-- [ ] Change `get_file_category(path: &str)` to `get_file_category(path: &Path)`
-- [ ] Replace `path.contains("/frontend/")` with `path.components()` checks
-- [ ] Use `path.extension()` instead of string `ends_with()`
+- [ ] Create static `Lazy<GlobSet>` for code file extensions
+- [ ] Replace chain of `path.extension() == Some(...)` with `GlobSet::is_match()`
+- [ ] Add test file patterns (.test., .spec.) to separate GlobSet
+- [ ] Benchmark: Should be O(1) instead of O(n)
 
-#### Optimize Case-Insensitive Matching
-- [ ] Replace `to_lowercase()` in keyword matching with `unicase`
-- [ ] Use `UniCase::new()` for comparisons
-- [ ] Benchmark memory reduction
+#### Optimize Case-Insensitive Matching (skill_activation_prompt.rs)
 
-#### Optional: Add Parallel Processing
+- [ ] Replace `prompt.to_lowercase()` with `UniCase::new(prompt)`
+- [ ] Replace `kw.to_lowercase()` in loop with `UniCase::new(kw)`
+- [ ] Benchmark: Should eliminate 100+ allocations
+- [ ] Verify case-insensitive matching still works correctly
+
+#### Optional: Add Parallel Processing (file_analyzer.rs)
+
 - [ ] Add `rayon` feature flag to Cargo.toml
-- [ ] Change sequential iteration to `.par_iter()` in file-analyzer
+- [ ] Change `entries.iter()` to `entries.par_iter()`
 - [ ] Test performance on large directories (>1000 files)
+- [ ] Expected improvement: 4-8x faster on multi-core systems
+- [ ] Add Windows test: Verify parallel processing works on Windows
 
-#### Optional: Multi-Pattern String Matching
-- [ ] Use `aho-corasick` for keyword matching in skill-activation-prompt
-- [ ] Compile keyword matcher once with Lazy static
-- [ ] Benchmark improvement
+#### Optional: Multi-Pattern String Matching (skill_activation_prompt.rs)
+
+- [ ] Create static `Lazy<AhoCorasick>` with all keywords
+- [ ] Replace `keywords.iter().any(...)` with `KEYWORD_MATCHER.is_match()`
+- [ ] Benchmark: Should be single-pass instead of N passes
+- [ ] Test with 100+ keywords
 
 ---
 
 **Implementation Examples:**
 
 ```rust
-// 1. Replace WalkDir with ignore
+// 1. Replace WalkDir with ignore crate (respects .gitignore)
 use ignore::WalkBuilder;
 
+// Before: Scans everything including node_modules/
+for entry in WalkDir::new(dir) { ... }
+
+// After: Automatically skips ignored files
 for result in WalkBuilder::new(&args.directory).build() {
     let entry = result?;
     if entry.file_type().is_some_and(|ft| ft.is_file()) {
-        // Process file
+        analyze_file(entry.path());
     }
 }
 ```
 
 ```rust
-// 2. Use globset for extensions
+// 2. Use globset for efficient extension matching
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use once_cell::sync::Lazy;
 
 static CODE_EXTENSIONS: Lazy<GlobSet> = Lazy::new(|| {
     let mut builder = GlobSetBuilder::new();
-    for ext in &["*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.cs"] {
-        builder.add(Glob::new(ext).unwrap());
+    for pattern in &["*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.cs"] {
+        builder.add(Glob::new(pattern).unwrap());
     }
     builder.build().unwrap()
 });
 
+// O(1) lookup instead of O(n) chain
 fn should_analyze(path: &Path) -> bool {
     CODE_EXTENSIONS.is_match(path)
 }
 ```
 
 ```rust
-// 3. Use Path methods instead of string contains
-fn get_file_category(path: &Path) -> &'static str {
-    // Convert to str for component checking
-    let path_str = path.to_string_lossy();
-
-    // Better: use path components
-    for component in path.components() {
-        match component.as_os_str().to_str() {
-            Some("frontend") | Some("client") | Some("components") => return "frontend",
-            Some("backend") | Some("server") | Some("api") => return "backend",
-            Some("database") | Some("prisma") => return "database",
-            _ => continue,
-        }
-    }
-
-    "other"
-}
-```
-
-```rust
-// 4. Case-insensitive without allocation
+// 3. Case-insensitive comparison without allocation
 use unicase::UniCase;
 
-fn matches_keyword(prompt: &str, keywords: &[String]) -> bool {
-    let prompt_uni = UniCase::new(prompt);
-    keywords.iter()
-        .any(|kw| prompt_uni.as_ref().contains(UniCase::new(kw).as_ref()))
-}
+// Before: Allocates for every comparison
+let keyword_match = triggers.keywords.iter()
+    .any(|kw| prompt.to_lowercase().contains(&kw.to_lowercase()));
+
+// After: Zero allocations
+let keyword_match = triggers.keywords.iter()
+    .any(|kw| UniCase::new(&prompt).as_ref().contains(UniCase::new(kw).as_ref()));
 ```
 
 ```rust
-// 5. Parallel processing with rayon
+// 4. Parallel directory traversal (optional)
 use rayon::prelude::*;
 
+// Before: Sequential (uses 1 core)
+for entry in entries {
+    analyze_file(entry.path());
+}
+
+// After: Parallel (uses all cores)
 let results: Vec<_> = entries
     .par_iter()
     .filter_map(|entry| analyze_file(entry.path()).ok())
@@ -964,16 +1723,18 @@ let results: Vec<_> = entries
 ```
 
 ```rust
-// 6. Multi-pattern matching with aho-corasick
+// 5. Multi-pattern matching in single pass (optional)
 use aho_corasick::AhoCorasick;
+use once_cell::sync::Lazy;
 
 static KEYWORD_MATCHER: Lazy<AhoCorasick> = Lazy::new(|| {
     AhoCorasick::builder()
         .ascii_case_insensitive(true)
-        .build(&["backend", "api", "controller", "service", "route"])
+        .build(&["backend", "api", "controller", "service", "route", "prisma"])
         .unwrap()
 });
 
+// Single pass through prompt string
 fn has_keyword(prompt: &str) -> bool {
     KEYWORD_MATCHER.is_match(prompt)
 }
@@ -982,6 +1743,7 @@ fn has_keyword(prompt: &str) -> bool {
 ---
 
 **Updated Cargo.toml:**
+
 ```toml
 [dependencies]
 # Core dependencies
@@ -1057,12 +1819,21 @@ valgrind --tool=massif ./target/release/skill-activation-prompt < input.json
 ---
 
 **Files to Modify:**
-- `Cargo.toml` - Add new dependencies and features
-- `src/bin/file_analyzer.rs` - Replace WalkDir, use globset, Path methods
-- `src/bin/skill_activation_prompt.rs` - Use unicase, aho-corasick for keywords
-- `src/bin/post_tool_use_tracker_sqlite.rs` - Use Path methods instead of strings
+
+- `catalyst-cli/Cargo.toml` - Add dependencies and optional features
+- `catalyst-cli/src/bin/file_analyzer.rs` - ignore crate, globset, rayon
+- `catalyst-cli/src/bin/skill_activation_prompt.rs` - unicase, aho-corasick
+
+**CI Validation:**
+
+- ✅ Build succeeds on all platforms (Linux, macOS, Windows)
+- ✅ Tests pass with new performance optimizations
+- ✅ Benchmarks show expected improvements
+- ✅ .gitignore respected on all platforms
 
 **Priority:** MEDIUM - Significant performance improvements, especially for large codebases
+
+**Note:** Phase 2.3a (Cross-Platform Path Handling) must be complete before starting this phase. Path refactoring is a prerequisite for using ignore/globset effectively.
 
 ---
 
@@ -1075,12 +1846,14 @@ valgrind --tool=massif ./target/release/skill-activation-prompt < input.json
 **Issue:** Need to parse, create, and update `.claude/settings.json` in a typesafe way for installation and configuration management.
 
 **Current Challenges:**
+
 - Manual JSON manipulation is error-prone
 - No validation of hook configurations
 - Installation scripts would benefit from programmatic settings updates
 - Need to merge configurations without breaking existing settings
 
 **Settings.json Structure to Support:**
+
 ```json
 {
   "enableAllProjectMcpServers": true,
@@ -1116,6 +1889,7 @@ Use `serde` with strongly-typed structs to ensure type safety and validation.
 **Tasks:**
 
 #### Create Settings Data Structures
+
 - [ ] Create `src/settings.rs` module (or `src/bin/settings_manager.rs` for CLI tool)
 - [ ] Define `ClaudeSettings` root struct
 - [ ] Define `Permissions` struct
@@ -1125,6 +1899,7 @@ Use `serde` with strongly-typed structs to ensure type safety and validation.
 - [ ] Add serde derive macros with proper field renaming
 
 #### Implement Core Operations
+
 - [ ] Implement `ClaudeSettings::read(path)` - Load from file
 - [ ] Implement `ClaudeSettings::write(path)` - Save to file
 - [ ] Implement `ClaudeSettings::merge(other)` - Merge configurations
@@ -1134,12 +1909,14 @@ Use `serde` with strongly-typed structs to ensure type safety and validation.
   - [ ] Validate permission patterns
 
 #### Add CLI Tool (Optional)
+
 - [ ] Create `settings-manager` binary
 - [ ] Add commands: `read`, `validate`, `add-hook`, `remove-hook`, `merge`
 - [ ] Add `--dry-run` flag for safety
 - [ ] Add pretty-printing with colors
 
 #### Update Installation Script
+
 - [ ] Use settings manager to add hooks during installation
 - [ ] Preserve existing user settings
 - [ ] Add backup before modifications
@@ -1662,15 +2439,18 @@ cargo test settings
 ---
 
 **Files to Create:**
+
 - `src/settings.rs` - Core data structures and operations
 - `src/bin/settings_manager.rs` - CLI tool (optional)
 
 **Files to Modify:**
+
 - `Cargo.toml` - Add [[bin]] entry for settings-manager
 - `src/lib.rs` - Add `pub mod settings;` if creating library
 - `install.sh` - Use settings-manager for hook installation
 
 **Dependencies Already Have:**
+
 - ✅ `serde` with derive feature
 - ✅ `serde_json`
 - ✅ `anyhow` (from Phase 2.4)
@@ -1690,6 +2470,7 @@ cargo test settings
 **Issue:** All scripts and path handling must work on Windows in addition to Linux/macOS.
 
 **Current Problems:**
+
 - Only bash scripts exist (install.sh, hook wrappers)
 - Path handling may use Unix-specific separators
 - settings.json paths use forward slashes (need to support both)
@@ -1703,6 +2484,7 @@ cargo test settings
 #### 1. Cross-Platform Path Handling in Rust Code
 
 **Current Issues:**
+
 ```rust
 // May not work correctly on Windows
 let rules_path = format!("{project_dir}/.claude/skills/skill-rules.json");
@@ -1710,6 +2492,7 @@ if path.contains("/frontend/") { ... }  // Unix-specific
 ```
 
 **Tasks:**
+
 - [ ] Use `std::path::PathBuf` and `Path` everywhere (not String concatenation)
 - [ ] Use `path.join()` instead of string formatting
 - [ ] Use `path.components()` instead of string contains
@@ -1717,6 +2500,7 @@ if path.contains("/frontend/") { ... }  // Unix-specific
 - [ ] Handle both `/` and `\` in user input gracefully
 
 **Fixed Approach:**
+
 ```rust
 use std::path::{Path, PathBuf};
 use std::env;
@@ -1751,6 +2535,7 @@ fn get_file_category(path: &Path) -> &'static str {
 **Tasks:**
 
 ##### install.ps1
+
 - [ ] Create `install.ps1` (PowerShell equivalent of install.sh)
 - [ ] Handle Rust installation check (rustup)
 - [ ] Build with cargo
@@ -1760,6 +2545,7 @@ fn get_file_category(path: &Path) -> &'static str {
 - [ ] Add to PATH or provide instructions
 
 **Example: install.ps1**
+
 ```powershell
 #!/usr/bin/env pwsh
 # install.ps1 - Windows installation script
@@ -1831,12 +2617,14 @@ Write-Host "  3. Restart Claude Code"
 ```
 
 ##### Hook Wrappers (PowerShell)
+
 - [ ] Create `.claude/hooks/skill-activation-prompt.ps1`
 - [ ] Create `.claude/hooks/post-tool-use-tracker.ps1`
 - [ ] Create `.claude/hooks/tsc-check.ps1` (if applicable)
 - [ ] Create `.claude/hooks/trigger-build-resolver.ps1` (if applicable)
 
 **Example: skill-activation-prompt.ps1**
+
 ```powershell
 #!/usr/bin/env pwsh
 # .claude/hooks/skill-activation-prompt.ps1
@@ -1853,6 +2641,7 @@ if ($LASTEXITCODE -eq 1 -and -not (Test-Path "$env:USERPROFILE\.claude-hooks\bin
 ```
 
 **Example: post-tool-use-tracker.ps1**
+
 ```powershell
 #!/usr/bin/env pwsh
 # .claude/hooks/post-tool-use-tracker.ps1
@@ -1873,12 +2662,14 @@ if ($LASTEXITCODE -eq 1 -and -not (Test-Path "$env:USERPROFILE\.claude-hooks\bin
 **Issue:** settings.json on Windows needs to reference PowerShell scripts.
 
 **Tasks:**
+
 - [ ] Update settings-manager to detect OS
 - [ ] Use `.ps1` extensions on Windows, `.sh` on Unix
 - [ ] Handle path separators correctly in settings.json
 - [ ] Document that settings.json can use forward slashes on Windows (Claude Code normalizes)
 
 **Example: Cross-platform settings addition**
+
 ```rust
 // In settings_manager.rs
 
@@ -1900,6 +2691,7 @@ let command = format!(
 ```
 
 **settings.json on Windows:**
+
 ```json
 {
   "hooks": {
@@ -1918,6 +2710,7 @@ let command = format!(
 #### 4. Update Documentation
 
 **Tasks:**
+
 - [ ] Add Windows installation instructions to README.md
 - [ ] Add PowerShell examples to docs/standalone-installation.md
 - [ ] Document cross-platform path handling
@@ -1925,6 +2718,7 @@ let command = format!(
 - [ ] Update CLAUDE.md with Windows setup
 
 **README.md Windows Section:**
+
 ```markdown
 ## Installation on Windows
 
@@ -1942,6 +2736,7 @@ let command = format!(
 ```
 
 ### Setup in Your Project
+
 ```powershell
 # Copy hook wrappers
 Copy-Item .claude/hooks/*.ps1 your-project/.claude/hooks/
@@ -1951,6 +2746,7 @@ Copy-Item .claude/hooks/*.ps1 your-project/.claude/hooks/
   --event UserPromptSubmit `
   --command '$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.ps1'
 ```
+
 ```
 
 ---
@@ -1991,6 +2787,7 @@ Get-Content test-input.json | .\.claude\hooks\skill-activation-prompt.ps1
 #### 6. Handle Windows-Specific Edge Cases
 
 **Tasks:**
+
 - [ ] Handle `USERPROFILE` vs `HOME` environment variable
 - [ ] Handle `Program Files` paths with spaces
 - [ ] Detect PowerShell vs CMD execution context
@@ -2000,6 +2797,7 @@ Get-Content test-input.json | .\.claude\hooks\skill-activation-prompt.ps1
 - [ ] Support both PowerShell Core (pwsh) and Windows PowerShell
 
 **Environment Variable Handling:**
+
 ```rust
 use std::env;
 
@@ -2030,6 +2828,7 @@ fn get_claude_hooks_dir() -> PathBuf {
 #### 7. CI/CD for Windows
 
 **Tasks:**
+
 - [ ] Add Windows to GitHub Actions matrix
 - [ ] Test on windows-latest runner
 - [ ] Build Windows binaries in CI
@@ -2037,6 +2836,7 @@ fn get_claude_hooks_dir() -> PathBuf {
 - [ ] Test PowerShell scripts in CI
 
 **GitHub Actions Example:**
+
 ```yaml
 # .github/workflows/ci.yml
 name: CI
@@ -2076,6 +2876,7 @@ jobs:
 **Summary of Files to Create:**
 
 **PowerShell Scripts:**
+
 - [ ] `install.ps1` - Main Windows installer
 - [ ] `.claude/hooks/skill-activation-prompt.ps1`
 - [ ] `.claude/hooks/post-tool-use-tracker.ps1`
@@ -2083,12 +2884,14 @@ jobs:
 - [ ] `.claude/hooks/trigger-build-resolver.ps1` (if applicable)
 
 **Documentation Updates:**
+
 - [ ] README.md - Add Windows installation section
 - [ ] docs/standalone-installation.md - Add PowerShell examples
 - [ ] docs/windows.md - New file for Windows-specific guidance
 - [ ] CLAUDE.md - Update integration guide for Windows
 
 **Code Updates:**
+
 - [ ] All `src/bin/*.rs` files - Use PathBuf instead of String paths
 - [ ] `settings_manager.rs` - Detect OS and use correct script extensions
 - [ ] `install.sh` - Add note about Windows users using install.ps1
@@ -2142,6 +2945,7 @@ Get-Content test.json | .\.claude\hooks\skill-activation-prompt.ps1
 **Priority:** HIGH - Essential for cross-platform adoption
 
 **Estimated Impact:**
+
 - 30-40% of potential users are on Windows
 - Rust cross-compilation makes this relatively straightforward
 - PowerShell is modern and well-supported
@@ -2162,6 +2966,7 @@ Get-Content test.json | .\.claude\hooks\skill-activation-prompt.ps1
 **Effort:** 15 minutes
 
 **Tasks:**
+
 - [ ] Update repository URL (remove placeholder)
 - [ ] Add homepage URL
 - [ ] Add readme field
@@ -2171,6 +2976,7 @@ Get-Content test.json | .\.claude\hooks\skill-activation-prompt.ps1
 - [ ] Verify license field is correct
 
 **Implementation:**
+
 ```toml
 [package]
 name = "catalyst"
@@ -2188,12 +2994,14 @@ categories = ["development-tools", "command-line-utilities"]
 ```
 
 **Verification:**
+
 ```bash
 cargo publish --dry-run
 # Should pass validation
 ```
 
 **Files to Modify:**
+
 - `Cargo.toml`
 
 ---
@@ -2205,6 +3013,7 @@ cargo publish --dry-run
 **Effort:** 1-2 hours
 
 **Tasks:**
+
 - [ ] Add `thiserror` dependency
 - [ ] Create custom error type for `skill_activation_prompt`
 - [ ] Create custom error type for `file_analyzer`
@@ -2212,6 +3021,7 @@ cargo publish --dry-run
 - [ ] Ensure error messages are helpful and actionable
 
 **Implementation:**
+
 ```rust
 use thiserror::Error;
 
@@ -2236,6 +3046,7 @@ fn main() -> Result<(), SkillActivationError> {
 ```
 
 **Verification:**
+
 ```bash
 # Test error messages
 echo "invalid json" | ./target/release/skill-activation-prompt
@@ -2243,6 +3054,7 @@ echo "invalid json" | ./target/release/skill-activation-prompt
 ```
 
 **Files to Modify:**
+
 - `Cargo.toml` - add `thiserror = "1.0"`
 - `src/bin/skill_activation_prompt.rs`
 - `src/bin/file_analyzer.rs`
@@ -2256,12 +3068,14 @@ echo "invalid json" | ./target/release/skill-activation-prompt
 **Effort:** 15 minutes
 
 **Tasks:**
+
 - [ ] Run `cargo fmt --all`
 - [ ] Run `cargo clippy --all-features --fix --allow-dirty`
 - [ ] Review and apply clippy suggestions
 - [ ] Set up pre-commit hook for formatting (optional)
 
 **Verification:**
+
 ```bash
 cargo fmt --all -- --check
 # Should show "No changes needed"
@@ -2279,6 +3093,7 @@ cargo clippy --all-features
 **Effort:** 2-3 hours
 
 **Tasks:**
+
 - [ ] Create `tests/` directory
 - [ ] Write integration test for `skill-activation-prompt`
   - [ ] Test with sample skill-rules.json
@@ -2292,6 +3107,7 @@ cargo clippy --all-features
   - [ ] Verify data persistence
 
 **Structure:**
+
 ```
 tests/
 ├── integration_test.rs
@@ -2303,6 +3119,7 @@ tests/
 ```
 
 **Example:**
+
 ```rust
 // tests/integration_test.rs
 use std::process::Command;
@@ -2321,6 +3138,7 @@ fn test_skill_activation_with_backend_prompt() {
 ```
 
 **Verification:**
+
 ```bash
 cargo test --test integration_test
 ```
@@ -2334,6 +3152,7 @@ cargo test --test integration_test
 **Effort:** 1-2 hours
 
 **Tasks:**
+
 - [ ] Create `benches/` directory
 - [ ] Add `criterion` to dev-dependencies
 - [ ] Write benchmark for skill activation
@@ -2342,6 +3161,7 @@ cargo test --test integration_test
 - [ ] Document performance characteristics
 
 **Implementation:**
+
 ```toml
 # Cargo.toml
 [dev-dependencies]
@@ -2369,6 +3189,7 @@ criterion_main!(benches);
 ```
 
 **Verification:**
+
 ```bash
 cargo bench
 # Should complete and generate report
@@ -2379,18 +3200,21 @@ cargo bench
 ## Quality Gates
 
 ### Before Any Release
+
 - [ ] All Phase 1 tasks complete
 - [ ] `cargo clippy --all-features -- -D warnings` passes
 - [ ] `cargo test --all-features` passes
 - [ ] No `unwrap()` in production code paths
 
 ### Before 1.0 Release
+
 - [ ] All Phase 1 and Phase 2 tasks complete
 - [ ] Documentation coverage >80%
 - [ ] Test coverage >70%
 - [ ] All public APIs documented
 
 ### Before crates.io Publication
+
 - [ ] All phases complete
 - [ ] `cargo publish --dry-run` passes
 - [ ] README.md is comprehensive
@@ -2414,11 +3238,13 @@ cargo bench
 ## Dependencies to Add
 
 ### Phase 1
+
 ```toml
 once_cell = "1.19"  # For lazy static regexes
 ```
 
 ### Phase 2 (Modern CLI & Performance)
+
 ```toml
 # CLI Improvements (Phase 2.4)
 clap = { version = "4.5", features = ["derive"] }  # Argument parsing (must-have)
@@ -2447,6 +3273,7 @@ progress = ["dep:indicatif"]          # Enable progress bars
 ```
 
 ### Phase 3
+
 ```toml
 thiserror = "1.0"   # For better error types (if not using anyhow)
 
