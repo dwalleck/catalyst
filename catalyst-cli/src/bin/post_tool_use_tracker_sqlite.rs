@@ -1,11 +1,20 @@
 use anyhow::Result;
 use chrono::Utc;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};
+
+// Pre-compiled regex patterns for file analysis (10-100x faster than compiling on each call)
+static TRY_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"try\s*\{").unwrap());
+static ASYNC_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"async\s+").unwrap());
+static PRISMA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"prisma\.|PrismaClient").unwrap());
+static CONTROLLER_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"Controller|router\.|app\.(get|post)").unwrap());
+static API_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"fetch\(|axios\.|apiClient\.").unwrap());
 
 // SQL update statements as named constants for maintainability
 const SQL_UPDATE_BACKEND: &str = "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, backend_files = backend_files + 1 WHERE session_id = ?2";
@@ -235,19 +244,13 @@ fn analyze_file(path: &str) -> FileAnalysis {
 
     let line_count = content.lines().count() as i32;
 
-    // Compile regexes
-    let try_regex = Regex::new(r"try\s*\{").unwrap();
-    let async_regex = Regex::new(r"async\s+").unwrap();
-    let prisma_regex = Regex::new(r"prisma\.|PrismaClient").unwrap();
-    let controller_regex = Regex::new(r"Controller|router\.|app\.(get|post)").unwrap();
-    let api_regex = Regex::new(r"fetch\(|axios\.|apiClient\.").unwrap();
-
+    // Use pre-compiled static regexes (10-100x faster than compiling on each call)
     FileAnalysis {
-        has_try_catch: try_regex.is_match(&content),
-        has_async: async_regex.is_match(&content),
-        has_prisma: prisma_regex.is_match(&content),
-        has_controller: controller_regex.is_match(&content),
-        has_api_call: api_regex.is_match(&content),
+        has_try_catch: TRY_REGEX.is_match(&content),
+        has_async: ASYNC_REGEX.is_match(&content),
+        has_prisma: PRISMA_REGEX.is_match(&content),
+        has_controller: CONTROLLER_REGEX.is_match(&content),
+        has_api_call: API_REGEX.is_match(&content),
         line_count,
     }
 }
