@@ -1,10 +1,12 @@
+use anyhow::{Context, Result};
+use clap::Parser;
+use colored::*;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::env;
 use std::fs;
-use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
+use tracing::{debug, info, warn};
 use walkdir::WalkDir;
 
 // Pre-compile regex patterns at module initialization (CRITICAL PERFORMANCE IMPROVEMENT)
@@ -19,13 +21,49 @@ static CONTROLLER_REGEX: Lazy<Regex> = Lazy::new(|| {
 static API_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"fetch\(|axios\.|HttpClient|apiClient\.").unwrap());
 
-#[derive(Debug)]
+/// Analyzes files in a directory for error-prone patterns
+#[derive(Parser)]
+#[command(name = "file-analyzer")]
+#[command(about = "Analyzes files for error-prone patterns", long_about = None)]
+#[command(version)]
+struct Args {
+    /// Directory to analyze
+    directory: PathBuf,
+
+    /// Show detailed output including all files analyzed
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Output format
+    #[arg(short, long, default_value = "text", value_parser = ["text", "json"])]
+    format: String,
+
+    /// Disable colored output
+    #[arg(long)]
+    no_color: bool,
+}
+
+#[derive(Debug, Default)]
 struct FileAnalysis {
     has_try_catch: bool,
     has_async: bool,
     has_prisma: bool,
     has_controller: bool,
     has_api_call: bool,
+}
+
+#[derive(Default)]
+struct Stats {
+    total_files: usize,
+    backend_files: usize,
+    frontend_files: usize,
+    database_files: usize,
+    other_files: usize,
+    async_files: usize,
+    try_catch_files: usize,
+    prisma_files: usize,
+    controller_files: usize,
+    api_call_files: usize,
 }
 
 // Cross-platform path categorization using path components instead of string contains
@@ -75,8 +113,9 @@ fn should_analyze(path: &str) -> bool {
         || path_lower.ends_with(".cs")
 }
 
-fn analyze_file(path: &Path) -> io::Result<FileAnalysis> {
-    let content = fs::read_to_string(path)?;
+fn analyze_file(path: &Path) -> Result<FileAnalysis> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
     // Use pre-compiled static regexes (10-100x faster than compiling on each call)
     Ok(FileAnalysis {
@@ -88,24 +127,110 @@ fn analyze_file(path: &Path) -> io::Result<FileAnalysis> {
     })
 }
 
-fn main() -> io::Result<()> {
-    let args: Vec<String> = env::args().collect();
+fn print_json_results(stats: &Stats, elapsed: std::time::Duration) {
+    let json = serde_json::json!({
+        "total_files": stats.total_files,
+        "categories": {
+            "backend": stats.backend_files,
+            "frontend": stats.frontend_files,
+            "database": stats.database_files,
+            "other": stats.other_files
+        },
+        "patterns": {
+            "async": stats.async_files,
+            "try_catch": stats.try_catch_files,
+            "prisma": stats.prisma_files,
+            "controllers": stats.controller_files,
+            "api_calls": stats.api_call_files
+        },
+        "duration_ms": elapsed.as_millis()
+    });
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} <directory>", args[0]);
-        eprintln!("\nAnalyzes files in directory for error-prone patterns");
-        return Ok(());
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+}
+
+fn print_text_results(stats: &Stats, elapsed: std::time::Duration, use_color: bool) {
+    if use_color {
+        println!(
+            "\n{}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_blue()
+        );
+        println!("{}\n", "📊 ANALYSIS RESULTS".bright_yellow().bold());
+    } else {
+        println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("📊 ANALYSIS RESULTS\n");
     }
 
-    let dir = &args[1];
+    println!("Total Files:    {}", stats.total_files);
+    println!("  Backend:      {}", stats.backend_files);
+    println!("  Frontend:     {}", stats.frontend_files);
+    println!("  Database:     {}", stats.database_files);
+    println!("  Other:        {}", stats.other_files);
+    println!("\nPatterns Detected:");
+    println!("  Async:        {}", stats.async_files);
+    println!("  Try/Catch:    {}", stats.try_catch_files);
+    println!("  Prisma:       {}", stats.prisma_files);
+    println!("  Controllers:  {}", stats.controller_files);
+    println!("  API Calls:    {}", stats.api_call_files);
+
+    if use_color {
+        println!(
+            "{}",
+            format!("\n⚡ Analysis completed in {:.2?}", elapsed).bright_green()
+        );
+        println!(
+            "{}\n",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_blue()
+        );
+    } else {
+        println!("\n⚡ Analysis completed in {:.2?}", elapsed);
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    }
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+
+    // Disable colors if requested or if NO_COLOR is set
+    if args.no_color || std::env::var("NO_COLOR").is_ok() {
+        colored::control::set_override(false);
+    }
+
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    info!("Analyzing directory: {:?}", args.directory);
+
+    if !args.directory.exists() {
+        anyhow::bail!("Directory does not exist: {}", args.directory.display());
+    }
+
     let start = Instant::now();
 
-    println!("\n🔍 ANALYZING FILES IN: {}\n", dir);
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    let use_color = !args.no_color && std::env::var("NO_COLOR").is_err();
+
+    if args.format == "text" {
+        if use_color {
+            println!(
+                "\n{}\n",
+                format!("🔍 ANALYZING FILES IN: {}", args.directory.display())
+                    .bright_cyan()
+                    .bold()
+            );
+        } else {
+            println!("\n🔍 ANALYZING FILES IN: {}\n", args.directory.display());
+        }
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    }
 
     let mut stats = Stats::default();
 
-    for entry in WalkDir::new(dir)
+    for entry in WalkDir::new(&args.directory)
         .follow_links(true)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -115,6 +240,7 @@ fn main() -> io::Result<()> {
         let path_str = path.to_string_lossy();
 
         if !should_analyze(&path_str) {
+            debug!("Skipping: {}", path_str);
             continue;
         }
 
@@ -128,64 +254,66 @@ fn main() -> io::Result<()> {
             _ => stats.other_files += 1,
         }
 
-        if let Ok(analysis) = analyze_file(path) {
-            if analysis.has_async {
-                stats.async_files += 1;
-            }
-            if analysis.has_try_catch {
-                stats.try_catch_files += 1;
-            }
-            if analysis.has_prisma {
-                stats.prisma_files += 1;
-            }
-            if analysis.has_controller {
-                stats.controller_files += 1;
-            }
-            if analysis.has_api_call {
-                stats.api_call_files += 1;
-            }
+        if args.verbose {
+            debug!("Analyzing: {} ({})", path_str, category);
+        }
 
-            // Flag risky patterns
-            if analysis.has_async && !analysis.has_try_catch {
-                println!(
-                    "⚠️  {} - Async without try/catch",
-                    path.file_name().unwrap().to_string_lossy()
-                );
+        match analyze_file(path) {
+            Ok(analysis) => {
+                if analysis.has_async {
+                    stats.async_files += 1;
+                }
+                if analysis.has_try_catch {
+                    stats.try_catch_files += 1;
+                }
+                if analysis.has_prisma {
+                    stats.prisma_files += 1;
+                }
+                if analysis.has_controller {
+                    stats.controller_files += 1;
+                }
+                if analysis.has_api_call {
+                    stats.api_call_files += 1;
+                }
+
+                // Flag risky patterns
+                if analysis.has_async && !analysis.has_try_catch {
+                    if args.format == "text" {
+                        if use_color {
+                            println!(
+                                "{}",
+                                format!(
+                                    "⚠️  {} - Async without try/catch",
+                                    path.file_name().unwrap().to_string_lossy()
+                                )
+                                .yellow()
+                            );
+                        } else {
+                            println!(
+                                "⚠️  {} - Async without try/catch",
+                                path.file_name().unwrap().to_string_lossy()
+                            );
+                        }
+                    }
+
+                    warn!(
+                        file = %path.display(),
+                        "Async code without try/catch"
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("Failed to analyze {}: {}", path.display(), e);
             }
         }
     }
 
     let elapsed = start.elapsed();
 
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("📊 ANALYSIS RESULTS\n");
-    println!("Total Files:    {}", stats.total_files);
-    println!("  Backend:      {}", stats.backend_files);
-    println!("  Frontend:     {}", stats.frontend_files);
-    println!("  Database:     {}", stats.database_files);
-    println!("  Other:        {}", stats.other_files);
-    println!("\nPatterns Detected:");
-    println!("  Async:        {}", stats.async_files);
-    println!("  Try/Catch:    {}", stats.try_catch_files);
-    println!("  Prisma:       {}", stats.prisma_files);
-    println!("  Controllers:  {}", stats.controller_files);
-    println!("  API Calls:    {}", stats.api_call_files);
-    println!("\n⚡ Analysis completed in {:.2?}", elapsed);
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    match args.format.as_str() {
+        "json" => print_json_results(&stats, elapsed),
+        _ => print_text_results(&stats, elapsed, use_color),
+    }
 
     Ok(())
-}
-
-#[derive(Default)]
-struct Stats {
-    total_files: usize,
-    backend_files: usize,
-    frontend_files: usize,
-    database_files: usize,
-    other_files: usize,
-    async_files: usize,
-    try_catch_files: usize,
-    prisma_files: usize,
-    controller_files: usize,
-    api_call_files: usize,
 }

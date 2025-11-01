@@ -22,6 +22,12 @@ anyhow = "1.0"
 once_cell = "1.19"
 walkdir = "2.4"
 
+# CLI improvements (Phase 2.4)
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "2.1"
+
 # SQLite (optional feature)
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = "0.4"

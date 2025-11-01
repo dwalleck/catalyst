@@ -19,6 +19,12 @@ anyhow = { workspace = true }
 once_cell = { workspace = true }
 walkdir = { workspace = true }
 
+# CLI improvements (Phase 2.4)
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+colored = { workspace = true }
+
 # SQLite feature dependencies
 rusqlite = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }

@@ -9,6 +9,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use tracing::debug;
 
 // Pre-compiled regex patterns for file analysis (10-100x faster than compiling on each call)
 static TRY_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"try\s*\{").unwrap());
@@ -334,13 +335,13 @@ fn main() -> Result<()> {
                 let db = Database::new(&data.session_id)?;
                 db.track_modification(&data.session_id, &file_path, tool)?;
 
-                // Debug output
-                if std::env::var("DEBUG_HOOKS").is_ok() {
-                    eprintln!(
-                        "[Rust/SQLite] Tracked: {file_path} ({})",
-                        get_file_category(&file_path).as_str()
-                    );
-                }
+                // Structured logging (controlled by RUST_LOG=debug)
+                debug!(
+                    file_path = %file_path,
+                    category = %get_file_category(&file_path).as_str(),
+                    tool = %tool,
+                    "Tracked file modification"
+                );
             }
         }
     }

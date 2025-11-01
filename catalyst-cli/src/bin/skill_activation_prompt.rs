@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use colored::*;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -177,38 +178,43 @@ fn main() -> Result<()> {
             .collect();
 
         if !critical.is_empty() {
-            println!("⚠️ CRITICAL SKILLS (REQUIRED):");
+            println!("{}", "⚠️ CRITICAL SKILLS (REQUIRED):".red().bold());
             for skill in critical {
-                println!("  → {}", skill.name);
+                println!("  → {}", skill.name.yellow());
             }
             println!();
         }
 
         if !high.is_empty() {
-            println!("📚 RECOMMENDED SKILLS:");
+            println!("{}", "📚 RECOMMENDED SKILLS:".blue().bold());
             for skill in high {
-                println!("  → {}", skill.name);
+                println!("  → {}", skill.name.cyan());
             }
             println!();
         }
 
         if !medium.is_empty() {
-            println!("💡 SUGGESTED SKILLS:");
+            println!("{}", "💡 SUGGESTED SKILLS:".green().bold());
             for skill in medium {
-                println!("  → {}", skill.name);
+                println!("  → {}", skill.name.bright_green());
             }
             println!();
         }
 
         if !low.is_empty() {
-            println!("📌 OPTIONAL SKILLS:");
+            println!("{}", "📌 OPTIONAL SKILLS:".white().bold());
             for skill in low {
-                println!("  → {}", skill.name);
+                println!("  → {}", skill.name.white());
             }
             println!();
         }
 
-        println!("ACTION: Use Skill tool BEFORE responding");
+        println!(
+            "{}",
+            "ACTION: Use Skill tool BEFORE responding"
+                .bright_yellow()
+                .bold()
+        );
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 
