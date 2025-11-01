@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use colored::*;
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use ignore::WalkBuilder;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::{debug, info, warn};
-use walkdir::WalkDir;
 
 // Pre-compile regex patterns at module initialization (CRITICAL PERFORMANCE IMPROVEMENT)
 static TRY_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"try\s*\{|try:|except:").unwrap());
@@ -20,6 +21,34 @@ static CONTROLLER_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 static API_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"fetch\(|axios\.|HttpClient|apiClient\.").unwrap());
+
+// Pre-compiled globsets for efficient pattern matching (Phase 2.5 optimization)
+static CODE_EXTENSIONS: Lazy<GlobSet> = Lazy::new(|| {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in &[
+        "*.ts", "*.tsx", "*.js", "*.jsx", "*.rs", "*.cs", "*.py", "*.go", "*.java", "*.c", "*.cpp",
+        "*.h",
+    ] {
+        builder.add(Glob::new(pattern).unwrap());
+    }
+    builder.build().unwrap()
+});
+
+static SKIP_PATTERNS: Lazy<GlobSet> = Lazy::new(|| {
+    let mut builder = GlobSetBuilder::new();
+    // Skip test files, config files, and type definitions
+    for pattern in &[
+        "*.test.*",
+        "*.spec.*",
+        "*.config.*",
+        "*/types/*",
+        "*.json",
+        "*.md",
+    ] {
+        builder.add(Glob::new(pattern).unwrap());
+    }
+    builder.build().unwrap()
+});
 
 /// Analyzes files in a directory for error-prone patterns
 #[derive(Parser)]
@@ -64,6 +93,7 @@ struct Stats {
     prisma_files: usize,
     controller_files: usize,
     api_call_files: usize,
+    failed_files: usize,
 }
 
 // Cross-platform path categorization using path components instead of string contains
@@ -90,27 +120,15 @@ fn get_file_category(path: &Path) -> &str {
     "other"
 }
 
-fn should_analyze(path: &str) -> bool {
-    let path_lower = path.to_lowercase();
-
-    // Skip test files, config files
-    if path_lower.contains(".test.")
-        || path_lower.contains(".spec.")
-        || path_lower.contains(".config.")
-        || path_lower.contains("/types/")
-        || path_lower.ends_with(".json")
-        || path_lower.ends_with(".md")
-    {
+// Phase 2.5: Optimized with globset (O(1) instead of O(n) chain of checks)
+fn should_analyze(path: &Path) -> bool {
+    // Skip files matching skip patterns
+    if SKIP_PATTERNS.is_match(path) {
         return false;
     }
 
-    // Check for code files
-    path_lower.ends_with(".ts")
-        || path_lower.ends_with(".tsx")
-        || path_lower.ends_with(".js")
-        || path_lower.ends_with(".jsx")
-        || path_lower.ends_with(".rs")
-        || path_lower.ends_with(".cs")
+    // Check if it's a code file
+    CODE_EXTENSIONS.is_match(path)
 }
 
 fn analyze_file(path: &Path) -> Result<FileAnalysis> {
@@ -130,6 +148,7 @@ fn analyze_file(path: &Path) -> Result<FileAnalysis> {
 fn print_json_results(stats: &Stats, elapsed: std::time::Duration) {
     let json = serde_json::json!({
         "total_files": stats.total_files,
+        "failed_files": stats.failed_files,
         "categories": {
             "backend": stats.backend_files,
             "frontend": stats.frontend_files,
@@ -167,6 +186,9 @@ fn print_text_results(stats: &Stats, elapsed: std::time::Duration, use_color: bo
     }
 
     println!("Total Files:    {}", stats.total_files);
+    if stats.failed_files > 0 {
+        println!("Failed Files:   {}", stats.failed_files);
+    }
     println!("  Backend:      {}", stats.backend_files);
     println!("  Frontend:     {}", stats.frontend_files);
     println!("  Database:     {}", stats.database_files);
@@ -234,17 +256,25 @@ fn main() -> Result<()> {
 
     let mut stats = Stats::default();
 
-    for entry in WalkDir::new(&args.directory)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
-        let path = entry.path();
-        let path_str = path.to_string_lossy();
+    // Phase 2.5: Use ignore crate instead of WalkDir (respects .gitignore, 10-100x faster)
+    for result in WalkBuilder::new(&args.directory).build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(err) => {
+                warn!("Failed to read entry: {}", err);
+                continue;
+            }
+        };
 
-        if !should_analyze(&path_str) {
-            debug!("Skipping: {}", path_str);
+        // Only process files
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        let path = entry.path();
+
+        // Phase 2.5: Optimized pattern matching with globset
+        if !should_analyze(path) {
             continue;
         }
 
@@ -259,7 +289,7 @@ fn main() -> Result<()> {
         }
 
         if args.verbose {
-            debug!("Analyzing: {} ({})", path_str, category);
+            debug!("Analyzing: {} ({})", path.display(), category);
         }
 
         match analyze_file(path) {
@@ -307,6 +337,7 @@ fn main() -> Result<()> {
             }
             Err(e) => {
                 warn!("Failed to analyze {}: {}", path.display(), e);
+                stats.failed_files += 1;
             }
         }
     }

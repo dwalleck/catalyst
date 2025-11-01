@@ -28,6 +28,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 colored = "2.1"
 
+# Performance optimizations (Phase 2.5)
+ignore = "0.4"              # .gitignore support (respects .gitignore files)
+globset = "0.4"             # Efficient glob pattern matching
+unicase = "2.7"             # Zero-allocation case-insensitive comparison
+rayon = "1.8"               # Parallel processing (optional feature)
+aho-corasick = "1.1"        # Multi-pattern string matching (optional feature)
+
 # SQLite (optional feature)
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = "0.4"

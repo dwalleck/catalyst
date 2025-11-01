@@ -25,6 +25,15 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 colored = { workspace = true }
 
+# Performance optimizations (Phase 2.5)
+ignore = { workspace = true }
+globset = { workspace = true }
+unicase = { workspace = true }
+
+# Optional performance features
+rayon = { workspace = true, optional = true }
+aho-corasick = { workspace = true, optional = true }
+
 # SQLite feature dependencies
 rusqlite = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
@@ -36,6 +45,11 @@ cargo-husky = { workspace = true }
 [features]
 default = []
 sqlite = ["dep:rusqlite", "dep:chrono"]
+# Reserved for future performance enhancements
+# parallel - Will enable parallel file processing with rayon
+# fast-patterns - Will enable multi-pattern string matching with aho-corasick
+parallel = ["dep:rayon"]
+fast-patterns = ["dep:aho-corasick"]
 
 # Binary definitions
 [[bin]]
