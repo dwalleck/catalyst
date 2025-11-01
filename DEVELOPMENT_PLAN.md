@@ -22,6 +22,7 @@ This plan addresses code quality improvements identified during the Rust best pr
 **Timeline:** Complete before any other phases begin
 
 **Why First:**
+
 - ✅ Catches issues immediately in all future PRs
 - ✅ Enforces code quality from day 1
 - ✅ Validates cross-platform compatibility (Linux/macOS/Windows)
@@ -184,6 +185,7 @@ cargo build --workspace --all-features --release
 **Post-Implementation:**
 
 After Phase 0 is complete, ALL subsequent phases will be validated by CI:
+
 - Phase 1 fixes will be tested on all platforms automatically
 - Phase 2 refactoring won't break existing functionality (tests catch regressions)
 - Phase 3 polish will maintain quality gates
@@ -344,6 +346,7 @@ path = "src/bin/settings_manager.rs"
 ### Rationale
 
 **Why Workspace?**
+
 - ✅ **Code reuse** - Settings module shared between binaries
 - ✅ **Clear separation** - Library (core) vs executables (CLI)
 - ✅ **Better testing** - Can test core library independently
@@ -352,10 +355,12 @@ path = "src/bin/settings_manager.rs"
 - ✅ **CI efficiency** - `cargo test --workspace` tests everything
 
 **Why Two Crates?**
+
 - `catalyst-core` - Reusable library code (settings, utils)
 - `catalyst-cli` - Command-line tools that use core
 
 **Alternative Considered (Rejected):**
+
 - ❌ Binaries only (no lib) - Can't share code between binaries cleanly
 - ❌ Monolithic lib + bins in one crate - Harder to test core separately
 
@@ -364,15 +369,18 @@ path = "src/bin/settings_manager.rs"
 Current files will be reorganized:
 
 **Files moving to catalyst-cli/src/bin/:**
+
 - `src/bin/skill_activation_prompt.rs` → `catalyst-cli/src/bin/skill_activation_prompt.rs`
 - `src/bin/file_analyzer.rs` → `catalyst-cli/src/bin/file_analyzer.rs`
 - `src/bin/post_tool_use_tracker_sqlite.rs` → `catalyst-cli/src/bin/post_tool_use_tracker_sqlite.rs`
 
 **New files in catalyst-core/src/:**
+
 - `lib.rs` - Library root, exports modules
 - `settings.rs` - Settings management (Phase 2.6)
 
 **Cargo.toml changes:**
+
 - Current `Cargo.toml` → `catalyst-cli/Cargo.toml` (with modifications)
 - New `Cargo.toml` at root (workspace)
 - New `catalyst-core/Cargo.toml`
@@ -386,6 +394,7 @@ Current files will be reorganized:
 - Testing: `cargo test --workspace` tests all crates
 
 **Phase Dependencies:**
+
 - Phase 2.6 (Settings) will create `catalyst-core/src/settings.rs`
 - Phase 2.6 (Settings Manager binary) will use `catalyst_core::settings`
 - All other binaries remain independent unless they need shared code
@@ -426,6 +435,7 @@ Phase 0 → Phase 0.2 → Phase 1.x → Phase 2.3a → {Phase 2.4, 2.5, 2.6} →
 ```
 
 **CI Validation:**
+
 - Every phase must pass CI before merging
 - Workspace changes validated on all platforms
 - Breaking changes caught immediately
@@ -833,6 +843,7 @@ cargo check --all-features
 **Current Problems:**
 
 1. **String concatenation instead of Path methods**
+
 ```rust
 // ❌ Current (Unix-only)
 let rules_path = format!("{project_dir}/.claude/skills/skill-rules.json");
@@ -845,6 +856,7 @@ let rules_path = project_dir
 ```
 
 2. **String contains for path detection**
+
 ```rust
 // ❌ Current (Unix-only)
 if path.contains("/frontend/") || path.contains("/client/") { ... }
@@ -863,6 +875,7 @@ fn get_file_category(path: &Path) -> &'static str {
 ```
 
 3. **Hardcoded Unix environment variables**
+
 ```rust
 // ❌ Current
 env::var("HOME")
@@ -1374,6 +1387,71 @@ Options:
 
 ---
 
+#### 2.4b Windows CLI Support
+
+**Status:** ❌ Not Started
+**Effort:** 1 hour
+
+**Issue:** Ensure all CLI improvements work correctly on Windows.
+
+**Tasks:**
+
+- [ ] Test colored output on Windows Terminal and PowerShell
+- [ ] Verify clap argument parsing works with Windows paths
+- [ ] Test tracing output to Windows Event Log (optional)
+- [ ] Ensure progress bars work in PowerShell
+- [ ] Test `NO_COLOR` environment variable on Windows
+- [ ] Verify `--help` formatting in cmd.exe and PowerShell
+- [ ] Test with paths containing spaces (Program Files)
+
+**Windows-Specific Considerations:**
+
+```powershell
+# Test colored output
+.\target\release\file-analyzer.exe C:\project
+# Should show colors in Windows Terminal
+
+# Test NO_COLOR
+$env:NO_COLOR = "1"
+.\target\release\file-analyzer.exe C:\project
+# Should show no colors
+
+# Test with spaces in path
+.\target\release\file-analyzer.exe "C:\Program Files\My Project"
+# Should handle path correctly
+
+# Test JSON output
+.\target\release\file-analyzer.exe C:\project --format json
+# Should output valid JSON
+
+# Test tracing on Windows
+$env:RUST_LOG = "debug"
+.\target\release\skill-activation-prompt.exe < input.json
+# Should show debug logs
+```
+
+**Known Windows Quirks:**
+
+- Windows Terminal supports ANSI colors, cmd.exe may not (colored crate handles this)
+- PowerShell requires backtick (`) for line continuation, not backslash
+- Environment variables use `$env:VAR` syntax
+- Paths use backslashes but forward slashes also work
+- Admin rights may be required for some operations
+
+**CI Validation:**
+
+- ✅ All CLI tools build on windows-latest
+- ✅ Help text displays correctly
+- ✅ Colored output works (or gracefully degrades)
+- ✅ Paths with spaces handled correctly
+
+**Files to Test:**
+
+- All binaries in `catalyst-cli/src/bin/`
+- Verify on Windows 10+ with both cmd.exe and PowerShell
+
+---
+
 ### 2.5 Performance Optimizations
 
 **Status:** ❌ Not Started
@@ -1845,6 +1923,8 @@ valgrind --tool=massif ./target/release/skill-activation-prompt < input.json
 
 **Issue:** Need to parse, create, and update `.claude/settings.json` in a typesafe way for installation and configuration management.
 
+**Note:** Settings management belongs in `catalyst-core` as shared library code that all binaries can use.
+
 **Current Challenges:**
 
 - Manual JSON manipulation is error-prone
@@ -1890,13 +1970,14 @@ Use `serde` with strongly-typed structs to ensure type safety and validation.
 
 #### Create Settings Data Structures
 
-- [ ] Create `src/settings.rs` module (or `src/bin/settings_manager.rs` for CLI tool)
+- [ ] Create `catalyst-core/src/settings.rs` module (shared library)
 - [ ] Define `ClaudeSettings` root struct
 - [ ] Define `Permissions` struct
 - [ ] Define `Hooks` struct with HashMap for event types
 - [ ] Define `HookConfig` struct (matcher + hooks array)
 - [ ] Define `Hook` struct (type + command)
 - [ ] Add serde derive macros with proper field renaming
+- [ ] Export from `catalyst-core/src/lib.rs`
 
 #### Implement Core Operations
 
@@ -1910,23 +1991,30 @@ Use `serde` with strongly-typed structs to ensure type safety and validation.
 
 #### Add CLI Tool (Optional)
 
-- [ ] Create `settings-manager` binary
+- [ ] Create `catalyst-cli/src/bin/settings_manager.rs` binary
 - [ ] Add commands: `read`, `validate`, `add-hook`, `remove-hook`, `merge`
 - [ ] Add `--dry-run` flag for safety
 - [ ] Add pretty-printing with colors
 
-#### Update Installation Script
+#### Update Installation Scripts
 
-- [ ] Use settings manager to add hooks during installation
-- [ ] Preserve existing user settings
+- [ ] Use interactive prompts to guide users through settings setup
+- [ ] Preserve existing user settings (merge, don't overwrite)
 - [ ] Add backup before modifications
+- [ ] Support both bash (install.sh) and PowerShell (install.ps1)
+
+#### CI Validation
+
+- [ ] CI runs `cargo build --bin settings-manager` to ensure it compiles
+- [ ] CI runs unit tests for settings module: `cargo test settings`
+- [ ] Verify builds on all platforms (Linux, macOS, Windows)
 
 ---
 
 **Implementation Examples:**
 
 ```rust
-// src/settings.rs or src/bin/settings_manager.rs
+// catalyst-core/src/settings.rs
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -2090,11 +2178,11 @@ impl Default for ClaudeSettings {
 **CLI Tool Example:**
 
 ```rust
-// src/bin/settings_manager.rs
+// catalyst-cli/src/bin/settings_manager.rs
 
 use clap::{Parser, Subcommand};
 use anyhow::Result;
-use catalyst::settings::*;
+use catalyst_core::settings::*;
 
 #[derive(Parser)]
 #[command(name = "settings-manager")]
@@ -2287,7 +2375,7 @@ fn main() -> Result<()> {
 ./settings-manager validate merged.json
 ```
 
-**Updated install.sh to Use Settings Manager:**
+**Updated install.sh with Interactive Prompts:**
 
 ```bash
 #!/bin/bash
@@ -2295,12 +2383,27 @@ fn main() -> Result<()> {
 
 # ... build code ...
 
-# Update settings.json using the settings manager
 SETTINGS_FILE="$HOME/.claude/settings.json"
-PROJECT_DIR="$CLAUDE_PROJECT_DIR"
 
-if [ ! -f "$SETTINGS_FILE" ]; then
-    echo "Creating new settings.json..."
+# Interactive prompt for settings configuration
+echo "📝 Settings Configuration"
+echo ""
+
+if [ -f "$SETTINGS_FILE" ]; then
+    echo "Found existing settings.json at $SETTINGS_FILE"
+    read -p "Do you want to update it with Catalyst hooks? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Skipping settings.json configuration."
+        exit 0
+    fi
+
+    # Backup existing settings
+    cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
+    echo "✅ Backup saved to $SETTINGS_FILE.backup"
+else
+    echo "No settings.json found. Creating new one..."
+    mkdir -p "$(dirname "$SETTINGS_FILE")"
     cat > "$SETTINGS_FILE" << 'EOF'
 {
   "hooks": {}
@@ -2308,27 +2411,33 @@ if [ ! -f "$SETTINGS_FILE" ]; then
 EOF
 fi
 
-# Backup existing settings
-cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
+# Show what will be added
+echo ""
+echo "The following hooks will be configured:"
+echo "  • UserPromptSubmit: skill-activation-prompt.sh"
+echo "  • PostToolUse: post-tool-use-tracker.sh"
+echo ""
 
-# Add UserPromptSubmit hook
-./target/release/settings-manager add-hook \
-  --path "$SETTINGS_FILE" \
-  --event UserPromptSubmit \
-  --command '$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh'
+# Use settings-manager for the actual merge (optional tool)
+if [ -f "./target/release/settings-manager" ]; then
+    ./target/release/settings-manager add-hook \
+      --path "$SETTINGS_FILE" \
+      --event UserPromptSubmit \
+      --command '$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh'
 
-# Add PostToolUse hook
-./target/release/settings-manager add-hook \
-  --path "$SETTINGS_FILE" \
-  --event PostToolUse \
-  --command '$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-tracker.sh' \
-  --matcher 'Edit|Write|MultiEdit'
+    ./target/release/settings-manager add-hook \
+      --path "$SETTINGS_FILE" \
+      --event PostToolUse \
+      --command '$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-tracker.sh' \
+      --matcher 'Edit|Write|MultiEdit'
 
-# Validate
-./target/release/settings-manager validate "$SETTINGS_FILE"
+    ./target/release/settings-manager validate "$SETTINGS_FILE"
+else
+    echo "⚠️  settings-manager not built. Please manually add hooks to $SETTINGS_FILE"
+    echo "See the documentation for hook configuration examples."
+fi
 
-echo "✅ Settings updated successfully"
-echo "📦 Backup saved to $SETTINGS_FILE.backup"
+echo "✅ Settings configuration complete"
 ```
 
 ---
@@ -2440,14 +2549,16 @@ cargo test settings
 
 **Files to Create:**
 
-- `src/settings.rs` - Core data structures and operations
-- `src/bin/settings_manager.rs` - CLI tool (optional)
+- `catalyst-core/src/settings.rs` - Core data structures and operations (shared library)
+- `catalyst-cli/src/bin/settings_manager.rs` - CLI tool (optional)
 
 **Files to Modify:**
 
-- `Cargo.toml` - Add [[bin]] entry for settings-manager
-- `src/lib.rs` - Add `pub mod settings;` if creating library
-- `install.sh` - Use settings-manager for hook installation
+- `catalyst-core/Cargo.toml` - Add dependencies (serde, serde_json, anyhow, regex)
+- `catalyst-core/src/lib.rs` - Add `pub mod settings;` export
+- `catalyst-cli/Cargo.toml` - Add settings-manager binary, depend on catalyst-core
+- `install.sh` - Interactive prompts for settings configuration
+- `install.ps1` - PowerShell version with interactive prompts (see Phase 2.6b)
 
 **Dependencies Already Have:**
 
@@ -2461,80 +2572,195 @@ cargo test settings
 
 ---
 
-### 2.7 Windows Support & Cross-Platform Compatibility
+#### 2.6b Windows-Specific Settings Management
+
+**Windows-Specific Testing:**
+
+```powershell
+# Build settings-manager on Windows
+cargo build --release --bin settings-manager
+
+# Test reading settings
+.\target\release\settings-manager.exe read "$env:USERPROFILE\.claude\settings.json"
+
+# Test validation
+.\target\release\settings-manager.exe validate "$env:USERPROFILE\.claude\settings.json"
+
+# Test adding hooks on Windows
+.\target\release\settings-manager.exe add-hook `
+  --event UserPromptSubmit `
+  --command '$CLAUDE_PROJECT_DIR\.claude\hooks\skill-activation-prompt.sh' `
+  --dry-run
+
+# Test with PowerShell paths
+.\target\release\settings-manager.exe add-hook `
+  --path "C:\Users\username\.claude\settings.json" `
+  --event PostToolUse `
+  --command '$CLAUDE_PROJECT_DIR\.claude\hooks\post-tool-use-tracker.sh' `
+  --matcher 'Edit|Write|MultiEdit'
+```
+
+**PowerShell install.ps1 Script:**
+
+```powershell
+# install.ps1
+# Interactive installation script for Windows
+
+# ... build code ...
+
+$SettingsFile = "$env:USERPROFILE\.claude\settings.json"
+
+Write-Host "📝 Settings Configuration" -ForegroundColor Cyan
+Write-Host ""
+
+if (Test-Path $SettingsFile) {
+    Write-Host "Found existing settings.json at $SettingsFile"
+    $response = Read-Host "Do you want to update it with Catalyst hooks? [y/N]"
+
+    if ($response -notmatch '^[Yy]$') {
+        Write-Host "Skipping settings.json configuration."
+        exit 0
+    }
+
+    # Backup existing settings
+    Copy-Item $SettingsFile "$SettingsFile.backup"
+    Write-Host "✅ Backup saved to $SettingsFile.backup" -ForegroundColor Green
+} else {
+    Write-Host "No settings.json found. Creating new one..."
+    $null = New-Item -ItemType Directory -Force -Path (Split-Path $SettingsFile)
+
+    @{
+        hooks = @{}
+    } | ConvertTo-Json | Set-Content $SettingsFile
+}
+
+# Show what will be added
+Write-Host ""
+Write-Host "The following hooks will be configured:"
+Write-Host "  • UserPromptSubmit: skill-activation-prompt.sh"
+Write-Host "  • PostToolUse: post-tool-use-tracker.sh"
+Write-Host ""
+
+# Use settings-manager for the actual merge
+$settingsManager = ".\target\release\settings-manager.exe"
+
+if (Test-Path $settingsManager) {
+    & $settingsManager add-hook `
+        --path $SettingsFile `
+        --event UserPromptSubmit `
+        --command '$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh'
+
+    & $settingsManager add-hook `
+        --path $SettingsFile `
+        --event PostToolUse `
+        --command '$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-tracker.sh' `
+        --matcher 'Edit|Write|MultiEdit'
+
+    & $settingsManager validate $SettingsFile
+} else {
+    Write-Host "⚠️  settings-manager.exe not built. Please manually add hooks." -ForegroundColor Yellow
+    Write-Host "See the documentation for hook configuration examples."
+}
+
+Write-Host "✅ Settings configuration complete" -ForegroundColor Green
+```
+
+**Windows Path Handling in Settings:**
+
+The settings module must handle both forward slashes (Unix) and backslashes (Windows) in hook commands. The `PathBuf` type from Phase 2.3a handles this automatically.
+
+```rust
+// Cross-platform hook command paths
+// Both of these work on Windows:
+"$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh"
+"$CLAUDE_PROJECT_DIR\\.claude\\hooks\\skill-activation-prompt.sh"
+
+// PathBuf normalizes both to the platform-appropriate separator
+```
+
+**CI Validation for Windows:**
+
+- [ ] Build settings-manager on Windows runner
+- [ ] Test reading/writing settings.json on Windows paths
+- [ ] Verify PowerShell install.ps1 script works
+- [ ] Test with spaces in Windows paths (e.g., "C:\Program Files\...")
+
+---
+
+### 2.7 Windows-Specific Components
 
 **Status:** ❌ Not Started
 **Assignee:** TBD
-**Effort:** 4-5 hours
+**Effort:** 2-3 hours
 
-**Issue:** All scripts and path handling must work on Windows in addition to Linux/macOS.
+**Issue:** Need PowerShell scripts, install.ps1, and Windows-specific documentation to complete Windows support.
 
-**Current Problems:**
+**Note:** This phase focuses ONLY on Windows-specific files not covered by parallel Windows subsections (2.3b, 2.4b, 2.5b, 2.6b):
+- Cross-platform path handling → See Phase 2.3a and 2.3b
+- CLI improvements on Windows → See Phase 2.4b
+- Settings management on Windows → See Phase 2.6b
+- CI/CD for Windows → See Phase 0
 
-- Only bash scripts exist (install.sh, hook wrappers)
-- Path handling may use Unix-specific separators
-- settings.json paths use forward slashes (need to support both)
-- No PowerShell equivalents for Windows users
-- File permissions (chmod) don't work on Windows
+**What This Phase Covers:**
+
+- PowerShell hook wrapper scripts
+- Main install.ps1 installation script
+- Documentation updates for Windows users
+- Git configuration for line endings
+- Final cross-platform testing validation
 
 ---
 
 **Required Changes:**
 
-#### 1. Cross-Platform Path Handling in Rust Code
-
-**Current Issues:**
-
-```rust
-// May not work correctly on Windows
-let rules_path = format!("{project_dir}/.claude/skills/skill-rules.json");
-if path.contains("/frontend/") { ... }  // Unix-specific
-```
+#### 1. Create PowerShell Hook Wrappers
 
 **Tasks:**
 
-- [ ] Use `std::path::PathBuf` and `Path` everywhere (not String concatenation)
-- [ ] Use `path.join()` instead of string formatting
-- [ ] Use `path.components()` instead of string contains
-- [ ] Test that `CLAUDE_PROJECT_DIR` with backslashes works
-- [ ] Handle both `/` and `\` in user input gracefully
+- [ ] Create `.claude/hooks/skill-activation-prompt.ps1`
+- [ ] Create `.claude/hooks/post-tool-use-tracker.ps1`
+- [ ] Create `.claude/hooks/tsc-check.ps1` (if applicable for TypeScript projects)
+- [ ] Create `.claude/hooks/trigger-build-resolver.ps1` (if applicable)
+- [ ] Ensure wrappers call binaries from `$env:USERPROFILE\.claude-hooks\bin`
+- [ ] Add fallback to project-local binaries if standalone not found
 
-**Fixed Approach:**
+**Example: skill-activation-prompt.ps1**
 
-```rust
-use std::path::{Path, PathBuf};
-use std::env;
+```powershell
+#!/usr/bin/env pwsh
+# .claude/hooks/skill-activation-prompt.ps1
 
-// Good: Cross-platform
-let project_dir = env::var("CLAUDE_PROJECT_DIR")
-    .map(PathBuf::from)
-    .unwrap_or_else(|_| PathBuf::from("."));
+# Read from stdin and pipe to Rust binary
+$input | & "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
 
-let rules_path = project_dir
-    .join(".claude")
-    .join("skills")
-    .join("skill-rules.json");
-
-// Good: Use path components
-fn get_file_category(path: &Path) -> &'static str {
-    for component in path.components() {
-        match component.as_os_str().to_str() {
-            Some("frontend") | Some("client") => return "frontend",
-            Some("backend") | Some("server") => return "backend",
-            _ => continue,
-        }
+# Fallback to project-local binary if standalone not found
+if ($LASTEXITCODE -eq 1 -and -not (Test-Path "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe")) {
+    if (Test-Path "$env:CLAUDE_PROJECT_DIR\target\release\skill-activation-prompt.exe") {
+        $input | & "$env:CLAUDE_PROJECT_DIR\target\release\skill-activation-prompt.exe"
     }
-    "other"
+}
+```
+
+**Example: post-tool-use-tracker.ps1**
+
+```powershell
+#!/usr/bin/env pwsh
+# .claude/hooks/post-tool-use-tracker.ps1
+
+$input | & "$env:USERPROFILE\.claude-hooks\bin\post-tool-use-tracker-sqlite.exe"
+
+if ($LASTEXITCODE -eq 1 -and -not (Test-Path "$env:USERPROFILE\.claude-hooks\bin\post-tool-use-tracker-sqlite.exe")) {
+    if (Test-Path "$env:CLAUDE_PROJECT_DIR\target\release\post-tool-use-tracker-sqlite.exe") {
+        $input | & "$env:CLAUDE_PROJECT_DIR\target\release\post-tool-use-tracker-sqlite.exe"
+    }
 }
 ```
 
 ---
 
-#### 2. Create PowerShell Scripts
+#### 2. Create Main install.ps1 Script
 
 **Tasks:**
-
-##### install.ps1
 
 - [ ] Create `install.ps1` (PowerShell equivalent of install.sh)
 - [ ] Handle Rust installation check (rustup)
@@ -2616,106 +2842,50 @@ Write-Host "  2. Update your project's .claude/settings.json"
 Write-Host "  3. Restart Claude Code"
 ```
 
-##### Hook Wrappers (PowerShell)
+---
 
-- [ ] Create `.claude/hooks/skill-activation-prompt.ps1`
-- [ ] Create `.claude/hooks/post-tool-use-tracker.ps1`
-- [ ] Create `.claude/hooks/tsc-check.ps1` (if applicable)
-- [ ] Create `.claude/hooks/trigger-build-resolver.ps1` (if applicable)
+#### 3. Git Configuration for Line Endings
 
-**Example: skill-activation-prompt.ps1**
+**Tasks:**
 
-```powershell
-#!/usr/bin/env pwsh
-# .claude/hooks/skill-activation-prompt.ps1
+- [ ] Create `.gitattributes` file
+- [ ] Ensure PowerShell scripts use CRLF on Windows
+- [ ] Ensure bash scripts use LF on all platforms
+- [ ] Ensure Rust code uses LF on all platforms
 
-# Read from stdin and pipe to Rust binary
-$input | & "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+**Example: .gitattributes**
 
-# Fallback to project-local binary if standalone not found
-if ($LASTEXITCODE -eq 1 -and -not (Test-Path "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe")) {
-    if (Test-Path "$env:CLAUDE_PROJECT_DIR\target\release\skill-activation-prompt.exe") {
-        $input | & "$env:CLAUDE_PROJECT_DIR\target\release\skill-activation-prompt.exe"
-    }
-}
-```
+```gitattributes
+# Default to LF
+* text=auto eol=lf
 
-**Example: post-tool-use-tracker.ps1**
+# PowerShell scripts need CRLF for Windows compatibility
+*.ps1 text eol=crlf
 
-```powershell
-#!/usr/bin/env pwsh
-# .claude/hooks/post-tool-use-tracker.ps1
+# Bash scripts use LF
+*.sh text eol=lf
 
-$input | & "$env:USERPROFILE\.claude-hooks\bin\post-tool-use-tracker-sqlite.exe"
+# Rust source files
+*.rs text eol=lf
+*.toml text eol=lf
 
-if ($LASTEXITCODE -eq 1 -and -not (Test-Path "$env:USERPROFILE\.claude-hooks\bin\post-tool-use-tracker-sqlite.exe")) {
-    if (Test-Path "$env:CLAUDE_PROJECT_DIR\target\release\post-tool-use-tracker-sqlite.exe") {
-        $input | & "$env:CLAUDE_PROJECT_DIR\target\release\post-tool-use-tracker-sqlite.exe"
-    }
-}
+# Markdown and docs
+*.md text eol=lf
+
+# JSON files
+*.json text eol=lf
 ```
 
 ---
 
-#### 3. Update settings.json for Windows
-
-**Issue:** settings.json on Windows needs to reference PowerShell scripts.
+#### 4. Documentation Updates
 
 **Tasks:**
 
-- [ ] Update settings-manager to detect OS
-- [ ] Use `.ps1` extensions on Windows, `.sh` on Unix
-- [ ] Handle path separators correctly in settings.json
-- [ ] Document that settings.json can use forward slashes on Windows (Claude Code normalizes)
-
-**Example: Cross-platform settings addition**
-
-```rust
-// In settings_manager.rs
-
-#[cfg(windows)]
-fn get_hook_script_extension() -> &'static str {
-    "ps1"
-}
-
-#[cfg(not(windows))]
-fn get_hook_script_extension() -> &'static str {
-    "sh"
-}
-
-// When adding hooks
-let ext = get_hook_script_extension();
-let command = format!(
-    "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.{ext}"
-);
-```
-
-**settings.json on Windows:**
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [{
-      "hooks": [{
-        "type": "command",
-        "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.ps1"
-      }]
-    }]
-  }
-}
-```
-
----
-
-#### 4. Update Documentation
-
-**Tasks:**
-
-- [ ] Add Windows installation instructions to README.md
+- [ ] Add Windows installation section to README.md
 - [ ] Add PowerShell examples to docs/standalone-installation.md
-- [ ] Document cross-platform path handling
-- [ ] Add troubleshooting section for Windows-specific issues
-- [ ] Update CLAUDE.md with Windows setup
+- [ ] Add Windows troubleshooting guide
+- [ ] Update CLAUDE.md with Windows integration instructions
 
 **README.md Windows Section:**
 
@@ -2751,151 +2921,42 @@ Copy-Item .claude/hooks/*.ps1 your-project/.claude/hooks/
 
 ---
 
-#### 5. Testing on Windows
-
-**Tasks:**
-- [ ] Test compilation on Windows (x86_64-pc-windows-msvc)
-- [ ] Test install.ps1 script
-- [ ] Test hook execution from Claude Code on Windows
-- [ ] Test path handling with backslashes
-- [ ] Test settings-manager on Windows
-- [ ] Verify SQLite works on Windows
-- [ ] Test file-analyzer with Windows paths
-- [ ] Document any Windows-specific limitations
-
-**Windows Testing Checklist:**
-```powershell
-# Build
-cargo build --release
-cargo build --release --features sqlite
-
-# Test binaries work
-echo '{"session_id":"test","prompt":"backend","cwd":".","permission_mode":"normal"}' | .\target\release\skill-activation-prompt.exe
-
-# Test file-analyzer with Windows paths
-.\target\release\file-analyzer.exe C:\Users\test\project
-
-# Test settings-manager
-.\target\release\settings-manager.exe validate .claude\settings.json
-
-# Test hooks via PowerShell
-Get-Content test-input.json | .\.claude\hooks\skill-activation-prompt.ps1
-```
-
----
-
-#### 6. Handle Windows-Specific Edge Cases
+#### 5. Cross-Platform Testing Validation
 
 **Tasks:**
 
-- [ ] Handle `USERPROFILE` vs `HOME` environment variable
-- [ ] Handle `Program Files` paths with spaces
-- [ ] Detect PowerShell vs CMD execution context
-- [ ] Handle Windows line endings (CRLF) in JSON files
-- [ ] Test with Windows Defender / antivirus scanning
-- [ ] Handle UNC paths (`\\server\share\`)
-- [ ] Support both PowerShell Core (pwsh) and Windows PowerShell
+- [ ] Verify all binaries compile on Windows (done in Phase 0 CI)
+- [ ] Test install.ps1 script end-to-end
+- [ ] Test PowerShell hook wrappers from Claude Code
+- [ ] Verify documentation is accurate for Windows users
+- [ ] Test paths with spaces (e.g., "C:\Program Files\...")
+- [ ] Validate final cross-platform testing matrix (see below)
 
-**Environment Variable Handling:**
+**Cross-Platform Testing Matrix:**
 
-```rust
-use std::env;
-
-fn get_home_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        env::var("USERPROFILE")
-            .or_else(|_| env::var("HOME"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Default"))
-    }
-
-    #[cfg(not(windows))]
-    {
-        env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/tmp"))
-    }
-}
-
-fn get_claude_hooks_dir() -> PathBuf {
-    get_home_dir().join(".claude-hooks").join("bin")
-}
-```
+| Feature | Linux | macOS | Windows | Notes |
+|---------|-------|-------|---------|-------|
+| Build (cargo) | ✅ | ✅ | ✅ | Validated in Phase 0 CI |
+| Install script | ✅ | ✅ | ✅ | bash vs PowerShell |
+| Hook execution | ✅ | ✅ | ✅ | .sh vs .ps1 |
+| Path handling | ✅ | ✅ | ✅ | Phase 2.3a (PathBuf) |
+| SQLite | ✅ | ✅ | ✅ | Bundled feature |
+| Settings manager | ✅ | ✅ | ✅ | Phase 2.6/2.6b |
+| CLI improvements | ✅ | ✅ | ✅ | Phase 2.4/2.4b |
 
 ---
 
-#### 7. CI/CD for Windows
-
-**Tasks:**
-
-- [ ] Add Windows to GitHub Actions matrix
-- [ ] Test on windows-latest runner
-- [ ] Build Windows binaries in CI
-- [ ] Create Windows release artifacts (.exe files)
-- [ ] Test PowerShell scripts in CI
-
-**GitHub Actions Example:**
-
-```yaml
-# .github/workflows/ci.yml
-name: CI
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable]
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Build
-        run: cargo build --release --all-features
-
-      - name: Test
-        run: cargo test --all-features
-
-      - name: Test install script (Unix)
-        if: runner.os != 'Windows'
-        run: ./install.sh
-
-      - name: Test install script (Windows)
-        if: runner.os == 'Windows'
-        run: .\install.ps1
-```
-
----
-
-**Summary of Files to Create:**
-
-**PowerShell Scripts:**
+**Summary - Files to Create:**
 
 - [ ] `install.ps1` - Main Windows installer
-- [ ] `.claude/hooks/skill-activation-prompt.ps1`
-- [ ] `.claude/hooks/post-tool-use-tracker.ps1`
-- [ ] `.claude/hooks/tsc-check.ps1` (if applicable)
-- [ ] `.claude/hooks/trigger-build-resolver.ps1` (if applicable)
+- [ ] `.claude/hooks/skill-activation-prompt.ps1` - Hook wrapper
+- [ ] `.claude/hooks/post-tool-use-tracker.ps1` - Hook wrapper
+- [ ] `.gitattributes` - Line ending configuration
+- [ ] README.md updates - Windows installation section
+- [ ] docs/standalone-installation.md updates - PowerShell examples
+- [ ] CLAUDE.md updates - Windows integration instructions
 
-**Documentation Updates:**
-
-- [ ] README.md - Add Windows installation section
-- [ ] docs/standalone-installation.md - Add PowerShell examples
-- [ ] docs/windows.md - New file for Windows-specific guidance
-- [ ] CLAUDE.md - Update integration guide for Windows
-
-**Code Updates:**
-
-- [ ] All `src/bin/*.rs` files - Use PathBuf instead of String paths
-- [ ] `settings_manager.rs` - Detect OS and use correct script extensions
-- [ ] `install.sh` - Add note about Windows users using install.ps1
-- [ ] `.gitattributes` - Ensure correct line endings (*.ps1 text eol=crlf)
+**Note:** Most cross-platform code changes are handled in Phases 2.3a, 2.4b, 2.5b, and 2.6b. This phase only creates Windows-specific scripts and documentation.
 
 ---
 
@@ -2904,52 +2965,33 @@ jobs:
 ```powershell
 # On Windows machine:
 
-# 1. Build succeeds
-cargo build --release --all-features
-
-# 2. Install script works
+# 1. Install script works
 .\install.ps1 -Sqlite
 
-# 3. Binaries installed
+# 2. Binaries installed correctly
 Test-Path "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+Test-Path "$env:USERPROFILE\.claude-hooks\bin\post-tool-use-tracker-sqlite.exe"
 
-# 4. Hooks execute
-echo '{"session_id":"test","prompt":"test","cwd":".","permission_mode":"normal"}' | & "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+# 3. Hook wrappers exist
+Test-Path .claude\hooks\skill-activation-prompt.ps1
+Test-Path .claude\hooks\post-tool-use-tracker.ps1
 
-# 5. Settings manager works
-.\target\release\settings-manager.exe validate .claude\settings.json
+# 4. Hooks execute via wrapper
+Get-Content test-input.json | .\.claude\hooks\skill-activation-prompt.ps1
 
-# 6. File analyzer handles Windows paths
-.\target\release\file-analyzer.exe C:\Users\test\project
-
-# 7. Hooks work via PowerShell wrapper
-Get-Content test.json | .\.claude\hooks\skill-activation-prompt.ps1
+# 5. Documentation complete
+# - README.md has Windows section
+# - docs/standalone-installation.md has PowerShell examples
+# - CLAUDE.md mentions Windows support
 ```
 
----
+**Priority:** MEDIUM - Completes Windows support started in parallel subsections (2.3b, 2.4b, 2.5b, 2.6b)
 
-**Cross-Platform Testing Matrix:**
-
-| Feature | Linux | macOS | Windows | Notes |
-|---------|-------|-------|---------|-------|
-| Build (cargo) | ✅ | ✅ | ✅ | All platforms |
-| Install script | ✅ | ✅ | ✅ | bash vs PowerShell |
-| Hook execution | ✅ | ✅ | ✅ | .sh vs .ps1 |
-| Path handling | ✅ | ✅ | ✅ | / vs \ |
-| SQLite | ✅ | ✅ | ✅ | Bundled feature |
-| Settings manager | ✅ | ✅ | ✅ | Cross-platform |
-| File permissions | ✅ | ✅ | ⚠️ | No chmod on Windows |
-
----
-
-**Priority:** HIGH - Essential for cross-platform adoption
-
-**Estimated Impact:**
-
-- 30-40% of potential users are on Windows
-- Rust cross-compilation makes this relatively straightforward
-- PowerShell is modern and well-supported
-- Most code is already cross-platform (Rust standard library)
+**Dependencies:**
+- Phase 0 (CI must validate Windows builds)
+- Phase 2.3a (Path handling foundation)
+- Phase 2.4 and 2.4b (CLI improvements on all platforms)
+- Phase 2.6 and 2.6b (Settings management with PowerShell examples)
 
 ---
 
@@ -3199,27 +3241,55 @@ cargo bench
 
 ## Quality Gates
 
-### Before Any Release
+**Note:** Phase 0 CI (GitHub Actions) automatically enforces baseline quality standards on every commit. See Phase 0 for CI configuration details.
+
+### Phase 0 CI Enforcement (Automatic)
+
+Phase 0 CI validates EVERY commit/PR:
+
+- ✅ Zero compiler warnings (`cargo build` must succeed cleanly)
+- ✅ Zero clippy warnings (`cargo clippy -D warnings`)
+- ✅ All tests pass (`cargo test --all-features`)
+- ✅ Code is formatted (`cargo fmt --check`)
+- ✅ Builds succeed on Linux, macOS, Windows
+- ✅ Install scripts run without errors
+
+**Result:** These quality gates are ENFORCED automatically - you cannot merge code that violates them.
+
+---
+
+### Before Any 0.x Release
 
 - [ ] All Phase 1 tasks complete
-- [ ] `cargo clippy --all-features -- -D warnings` passes
-- [ ] `cargo test --all-features` passes
-- [ ] No `unwrap()` in production code paths
+- [ ] Phase 0 CI passing on main branch (enforced automatically)
+- [ ] No `unwrap()` or `expect()` in production code paths (use `?` operator or proper error handling)
+- [ ] Zero `TODO` comments in committed code
+- [ ] All binaries compile with `--release` flag
+- [ ] Binaries run successfully on all three platforms (verified by CI)
 
 ### Before 1.0 Release
 
 - [ ] All Phase 1 and Phase 2 tasks complete
-- [ ] Documentation coverage >80%
-- [ ] Test coverage >70%
-- [ ] All public APIs documented
+- [ ] Phase 0 CI passing (enforced automatically)
+- [ ] Documentation coverage ≥80% (run `cargo doc --workspace --no-deps`)
+- [ ] Test coverage ≥70% (run `cargo tarpaulin` or equivalent)
+- [ ] All public APIs have documentation with examples
+- [ ] No public APIs marked `#[doc(hidden)]` without justification
+- [ ] Performance benchmarks document baseline (if added in Phase 3)
+- [ ] Binary size ≤3MB per binary
+- [ ] Startup time ≤5ms for all binaries
 
 ### Before crates.io Publication
 
-- [ ] All phases complete
-- [ ] `cargo publish --dry-run` passes
-- [ ] README.md is comprehensive
-- [ ] CHANGELOG.md exists
-- [ ] LICENSE file exists
+- [ ] All phases (0, 1, 2, 3) complete
+- [ ] Phase 0 CI passing with zero warnings (enforced automatically)
+- [ ] `cargo publish --dry-run` passes for all crates
+- [ ] README.md is comprehensive with examples
+- [ ] CHANGELOG.md exists and follows [Keep a Changelog](https://keepachangelog.com/)
+- [ ] LICENSE file exists (MIT or chosen license)
+- [ ] Cargo.toml metadata complete (see Phase 3.1)
+- [ ] GitHub repository URL is correct (no placeholders)
+- [ ] Documentation published to docs.rs successfully
 
 ---
 

@@ -28,6 +28,7 @@ Provide developers with battle-tested infrastructure that makes Claude Code's sk
 ### Goals
 
 **Primary Goals:**
+
 - ✅ Solve the skill auto-activation problem
 - ✅ Provide maximum performance Rust hooks (~2ms startup)
 - ✅ Enable zero-dependency deployment
@@ -35,6 +36,7 @@ Provide developers with battle-tested infrastructure that makes Claude Code's sk
 - ✅ Support optional SQLite state management
 
 **Secondary Goals:**
+
 - ✅ Document dev docs pattern for context preservation
 - ✅ Showcase specialized agents for complex tasks
 - ✅ Provide integration guides for different project structures
@@ -64,22 +66,26 @@ Claude Code Infrastructure
 ### Core Architecture Principles
 
 **1. Performance First**
+
 - Rust implementation for imperceptible latency (~2ms)
 - Zero runtime dependencies (single binary)
 - Minimal memory footprint (3-5MB)
 - Optional SQLite for rich queries
 
 **2. Progressive Disclosure**
+
 - Skills use 500-line rule (main file + resource files)
 - Load overview first, details only when needed
 - Prevents context limit issues
 
 **3. Modular & Composable**
+
 - Each component works independently
 - Users can mix and match
 - No tight coupling between components
 
 **4. Production-Tested**
+
 - All patterns extracted from real-world use
 - Generic examples (blog domain) for broad applicability
 - Documented edge cases and gotchas
@@ -93,6 +99,7 @@ Claude Code Infrastructure
 **Purpose:** Provide domain-specific knowledge that Claude loads when relevant.
 
 **Architecture:**
+
 ```
 skill-name/
 ├── SKILL.md                 # Main file (<500 lines)
@@ -107,6 +114,7 @@ skill-name/
 ```
 
 **Auto-Activation Mechanism:**
+
 ```
 skill-rules.json defines:
 ├── Keyword triggers      ("backend", "API", "Prisma")
@@ -122,6 +130,7 @@ UserPromptSubmit hook (Rust):
 ```
 
 **Implemented Skills:**
+
 1. **backend-dev-guidelines** - Express/Prisma/TypeScript patterns
 2. **frontend-dev-guidelines** - React/MUI v7/TanStack patterns
 3. **skill-developer** - Meta-skill for creating skills
@@ -129,6 +138,7 @@ UserPromptSubmit hook (Rust):
 5. **error-tracking** - Sentry integration patterns
 
 **Design Decisions:**
+
 - ✅ 500-line limit prevents context overflow
 - ✅ Generic blog domain (Post/Comment/User) for broad applicability
 - ✅ Framework-specific to provide concrete examples
@@ -141,6 +151,7 @@ UserPromptSubmit hook (Rust):
 **Purpose:** Enable event-driven automation at specific lifecycle points.
 
 **Hook Events:**
+
 - **UserPromptSubmit** - Before processing user input
 - **PreToolUse** - Before tool execution
 - **PostToolUse** - After tool completion
@@ -149,6 +160,7 @@ UserPromptSubmit hook (Rust):
 **Essential Hooks:**
 
 **skill-activation-prompt (UserPromptSubmit)**
+
 - Analyzes user prompt
 - Checks file context
 - Matches against skill-rules.json
@@ -156,6 +168,7 @@ UserPromptSubmit hook (Rust):
 - **Implementation:** Rust (maximum performance)
 
 **post-tool-use-tracker (PostToolUse)**
+
 - Tracks file modifications
 - Records tool usage
 - Builds session context
@@ -187,6 +200,7 @@ project/.claude/hooks/
 ```
 
 **Advantages:**
+
 - ✅ Compile once (45s), use everywhere (0s per project)
 - ✅ Update in one place, all projects benefit
 - ✅ Tiny per-project footprint (50 bytes vs 2MB)
@@ -199,6 +213,7 @@ project/.claude/hooks/
 **Purpose:** Handle complex, multi-step tasks autonomously.
 
 **Architecture:**
+
 - Standalone markdown files
 - No dependencies on skills or hooks
 - Launched via Task tool
@@ -207,22 +222,26 @@ project/.claude/hooks/
 **Categories:**
 
 **Code Quality:**
+
 - code-architecture-reviewer
 - code-refactor-master
 - plan-reviewer
 - refactor-planner
 
 **Debugging:**
+
 - frontend-error-fixer
 - auth-route-debugger
 - auto-error-resolver
 
 **Development:**
+
 - documentation-architect
 - auth-route-tester
 - web-research-specialist
 
 **Design Principles:**
+
 - ✅ Stateless - each invocation is fresh
 - ✅ Focused - one task per agent
 - ✅ Autonomous - runs without user input
@@ -235,6 +254,7 @@ project/.claude/hooks/
 **Purpose:** Preserve context across Claude Code session resets.
 
 **Three-File Structure:**
+
 ```
 dev/active/[task-name]/
 ├── [task-name]-plan.md      # Strategic plan with phases
@@ -243,6 +263,7 @@ dev/active/[task-name]/
 ```
 
 **Workflow:**
+
 1. `/dev-docs` creates initial structure
 2. Work proceeds, updating context
 3. `/dev-docs-update` before context reset
@@ -250,6 +271,7 @@ dev/active/[task-name]/
 5. Resume exactly where left off
 
 **Design Decisions:**
+
 - ✅ Three files balance detail vs readability
 - ✅ Markdown for version control
 - ✅ Slash commands automate creation
@@ -262,6 +284,7 @@ dev/active/[task-name]/
 ### Rust Implementation
 
 **File Structure:**
+
 ```
 catalyst/
 ├── src/bin/
@@ -274,6 +297,7 @@ catalyst/
 ```
 
 **Dependencies:**
+
 ```toml
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -286,6 +310,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 ```
 
 **Execution Model:**
+
 - Compile to native binary
 - Install to `~/.claude-hooks/bin/`
 - Per-project wrapper calls binary
@@ -298,12 +323,14 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 **Binary Size:** 1.8-2.4MB stripped
 
 **Pros:**
+
 - Imperceptible latency
 - No runtime needed
 - Minimal memory
 - Maximum safety (no null pointers, no data races)
 
 **Cons:**
+
 - Requires Rust for building from source
 - 45s compile time
 - Steeper learning curve for modifications
@@ -315,6 +342,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 ### Problem Statement
 
 Hooks need to track file modifications across a session to:
+
 - Analyze patterns (async without try/catch)
 - Generate statistics (files modified per category)
 - Provide context-aware reminders
@@ -325,6 +353,7 @@ Hooks need to track file modifications across a session to:
 #### Option 1: File-Based (Current for post-tool-use-tracker)
 
 **Implementation:**
+
 ```bash
 # edited-files.log
 2024-10-30T14:30:00Z    Edit    src/controllers/UserController.ts
@@ -332,12 +361,14 @@ Hooks need to track file modifications across a session to:
 ```
 
 **Pros:**
+
 - ✅ Simplest implementation
 - ✅ Fastest writes (append only)
 - ✅ Human readable
 - ✅ No dependencies
 
 **Cons:**
+
 - ❌ O(n) query time (must scan entire file)
 - ❌ No structured queries
 - ❌ Manual parsing required
@@ -349,6 +380,7 @@ Hooks need to track file modifications across a session to:
 #### Option 2: SQLite (Rust)
 
 **Implementation:**
+
 ```rust
 let conn = Connection::open(&db_path)?;
 
@@ -367,6 +399,7 @@ let mut stmt = conn.prepare(
 ```
 
 **Pros:**
+
 - ✅ 100x faster queries than file-based
 - ✅ Smallest database files
 - ✅ Best query performance
@@ -374,6 +407,7 @@ let mut stmt = conn.prepare(
 - ✅ Battle-tested (used everywhere)
 
 **Cons:**
+
 - ❌ More complex setup
 - ❌ Requires Cargo-sqlite.toml configuration
 
@@ -401,6 +435,7 @@ Testing 1000 file modifications:
 ### Monorepo Pattern
 
 **skill-rules.json:**
+
 ```json
 {
   "backend-dev-guidelines": {
@@ -415,6 +450,7 @@ Testing 1000 file modifications:
 ```
 
 **Hook Detection:**
+
 ```rust
 fn detect_repo(file_path: &str) -> String {
     let parts: Vec<&str> = file_path.split('/').collect();
@@ -433,6 +469,7 @@ fn detect_repo(file_path: &str) -> String {
 ### Single-App Pattern
 
 **skill-rules.json:**
+
 ```json
 {
   "backend-dev-guidelines": {
@@ -453,6 +490,7 @@ fn detect_repo(file_path: &str) -> String {
 ### For Skill Developers
 
 **Adding a New Skill:**
+
 1. Create skill directory
 2. Write SKILL.md (<500 lines)
 3. Create resource files for details
@@ -461,6 +499,7 @@ fn detect_repo(file_path: &str) -> String {
 6. Document in README
 
 **Best Practices:**
+
 - Use generic domain examples
 - Include both what to do and what to avoid
 - Provide code snippets
@@ -472,6 +511,7 @@ fn detect_repo(file_path: &str) -> String {
 ### For Hook Developers
 
 **Modifying Rust Hooks:**
+
 1. Edit source in `src/bin/`
 2. Test with `cargo run --bin <hook-name>`
 3. Build release: `cargo build --release`
@@ -479,6 +519,7 @@ fn detect_repo(file_path: &str) -> String {
 5. Test in real project
 
 **Adding New Functionality:**
+
 ```rust
 // Example: Add new pattern matching
 fn check_pattern(content: &str) -> bool {
@@ -494,6 +535,7 @@ fn check_pattern(content: &str) -> bool {
 ### Hook Testing
 
 **Unit Tests:**
+
 ```bash
 # Test with sample input
 echo '{
@@ -507,6 +549,7 @@ echo '{
 ```
 
 **Performance Tests:**
+
 ```bash
 # Benchmark startup time
 time ./target/release/skill-activation-prompt < input.json
@@ -519,6 +562,7 @@ time ./target/release/skill-activation-prompt < input.json
 ### Skill Testing
 
 **Activation Tests:**
+
 ```json
 {
   "test": "keyword trigger",
@@ -528,6 +572,7 @@ time ./target/release/skill-activation-prompt < input.json
 ```
 
 **Content Tests:**
+
 - Verify main file < 500 lines
 - Check resource files exist
 - Validate markdown syntax
@@ -540,10 +585,12 @@ time ./target/release/skill-activation-prompt < input.json
 ### Hook Performance
 
 **UserPromptSubmit Hooks:**
+
 - Target: <50ms (imperceptible to user)
 - Achieved: ~2ms with Rust ✅
 
 **PostToolUse/Stop Hooks:**
+
 - More lenient (run in background or when paused)
 - File-based implementation acceptable
 
@@ -552,11 +599,13 @@ time ./target/release/skill-activation-prompt < input.json
 ### Database Performance (SQLite)
 
 **Query Requirements:**
+
 - Simple queries: <5ms
 - Complex queries: <20ms
 - Aggregations: <50ms
 
 **Achieved with Rust + SQLite:**
+
 - SQLite (Rust): 0.8ms - 2ms ✅
 
 ---
@@ -566,12 +615,14 @@ time ./target/release/skill-activation-prompt < input.json
 ### Input Validation
 
 **All hooks must:**
+
 - Validate JSON input structure
 - Sanitize file paths (prevent traversal)
 - Limit input size (prevent DoS)
 - Handle malformed input gracefully
 
 **Example:**
+
 ```rust
 // Validate session ID format
 if !session_id.chars().all(|c| c.is_alphanumeric() || c == '-') {
@@ -590,12 +641,14 @@ if !canonical.starts_with(&project_dir) {
 ### File System Access
 
 **Hooks should:**
+
 - Only read from `$CLAUDE_PROJECT_DIR`
 - Only write to `~/.claude/hooks-state/`
 - Validate all file paths
 - Use canonical paths
 
 **Never:**
+
 - Write to arbitrary locations
 - Execute user-provided commands
 - Read sensitive files (/.ssh/, /etc/)
@@ -605,12 +658,14 @@ if !canonical.starts_with(&project_dir) {
 ### Database Security (SQLite)
 
 **Best Practices:**
+
 - Use parameterized queries (prevent injection)
 - Validate input before queries
 - Limit database size (prevent disk fill)
 - Auto-cleanup old sessions
 
 **Example:**
+
 ```rust
 // Good: Parameterized query
 conn.execute(
@@ -629,12 +684,14 @@ conn.execute(
 ### Distribution Channels
 
 **1. GitHub Repository** (Primary)
+
 - Complete source code
 - Pre-built binaries (GitHub Releases)
 - Documentation and examples
 - Issue tracking
 
 **2. Installation Script**
+
 ```bash
 # From catalyst directory
 ./install.sh
@@ -649,17 +706,20 @@ conn.execute(
 ## Future Roadmap
 
 ### Phase 1: Foundation (Complete ✅)
+
 - [x] Rust hook implementation
 - [x] SQLite state management option
 - [x] Comprehensive documentation
 - [x] Production-tested patterns
 
 ### Phase 2: Ecosystem (In Progress)
+
 - [ ] Pre-built binaries for all platforms
 - [ ] Homebrew formula for macOS
 - [ ] Community contributions
 
 ### Phase 3: Advanced Features
+
 - [ ] Web-based dashboard for session analytics
 - [ ] Cross-session pattern detection
 - [ ] Team collaboration features
@@ -669,17 +729,20 @@ conn.execute(
 ## Success Metrics
 
 ### Adoption Metrics
+
 - GitHub stars and forks
 - Download counts (releases)
 - Community contributions
 
 ### Quality Metrics
+
 - Issue resolution time
 - Test coverage
 - Performance benchmarks
 - Documentation completeness
 
 ### Impact Metrics
+
 - User testimonials
 - Production deployments
 - Derived projects
@@ -691,6 +754,7 @@ conn.execute(
 ### Code Contributions
 
 **Before Contributing:**
+
 1. Check existing issues
 2. Discuss major changes first
 3. Follow Rust coding standards
@@ -698,6 +762,7 @@ conn.execute(
 5. Update documentation
 
 **Code Standards:**
+
 - Rust: rustfmt + clippy
 - Clear comments, meaningful names
 
@@ -708,6 +773,7 @@ conn.execute(
 MIT License - Permissive, allows commercial use.
 
 **Rationale:**
+
 - Maximize adoption
 - Allow commercial use
 - Enable derivatives
@@ -738,5 +804,6 @@ MIT License - Permissive, allows commercial use.
 ---
 
 **Document History:**
+
 - 2025-10-30: Version 2.0 - Rust-only implementation
 - 2025-10-30: Version 1.0 - Initial version with multiple language implementations
