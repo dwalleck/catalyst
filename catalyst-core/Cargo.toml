@@ -14,4 +14,5 @@ anyhow = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
-# Phase 2.2: Unit tests will be added here
+# Phase 2.6: Integration tests for file I/O
+tempfile = "3.8"

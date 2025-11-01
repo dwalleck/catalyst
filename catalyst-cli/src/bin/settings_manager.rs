@@ -31,6 +31,7 @@ use catalyst_core::settings::*;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::env;
+use std::io::{self, IsTerminal};
 
 #[derive(Parser)]
 #[command(name = "settings-manager")]
@@ -117,8 +118,8 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    // Check for NO_COLOR environment variable
-    let use_color = env::var("NO_COLOR").is_err();
+    // Check for NO_COLOR environment variable and TTY
+    let use_color = env::var("NO_COLOR").is_err() && io::stdout().is_terminal();
 
     let cli = Cli::parse();
 
@@ -147,14 +148,17 @@ fn main() -> Result<()> {
             matcher,
             dry_run,
         } => {
+            // Check if file exists before loading
+            let file_exists = std::path::Path::new(&path).exists();
+
             // Load existing settings or create new
             let mut settings = ClaudeSettings::read(&path).unwrap_or_default();
 
             let hook_config = HookConfig {
-                matcher,
+                matcher: matcher.clone(),
                 hooks: vec![Hook {
                     r#type: "command".to_string(),
-                    command,
+                    command: command.clone(),
                 }],
             };
 
@@ -172,10 +176,37 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&settings)?);
             } else {
                 settings.write(&path)?;
+
                 if use_color {
-                    println!("{} {}", "✅ Hook added to".green().bold(), path);
+                    if file_exists {
+                        println!(
+                            "{} {}",
+                            "✅ Hook added to existing file:".green().bold(),
+                            path
+                        );
+                    } else {
+                        println!(
+                            "{} {}",
+                            "✅ Created new settings file:".green().bold(),
+                            path
+                        );
+                    }
+                    println!("  {} {}", "Event:".cyan(), event);
+                    println!("  {} {}", "Command:".cyan(), command);
+                    if let Some(m) = matcher {
+                        println!("  {} {}", "Matcher:".cyan(), m);
+                    }
                 } else {
-                    println!("✅ Hook added to {}", path);
+                    if file_exists {
+                        println!("✅ Hook added to existing file: {}", path);
+                    } else {
+                        println!("✅ Created new settings file: {}", path);
+                    }
+                    println!("  Event: {}", event);
+                    println!("  Command: {}", command);
+                    if let Some(m) = matcher {
+                        println!("  Matcher: {}", m);
+                    }
                 }
             }
         }
@@ -236,9 +267,15 @@ fn main() -> Result<()> {
             } else {
                 base_settings.write(output_path)?;
                 if use_color {
-                    println!("{} {}", "✅ Settings merged to".green().bold(), output_path);
+                    println!("{}", "✅ Settings merged successfully".green().bold());
+                    println!("  {} {}", "Base file:".cyan(), base);
+                    println!("  {} {}", "Merged from:".cyan(), merge);
+                    println!("  {} {}", "Output:".cyan(), output_path);
                 } else {
-                    println!("✅ Settings merged to {}", output_path);
+                    println!("✅ Settings merged successfully");
+                    println!("  Base file: {}", base);
+                    println!("  Merged from: {}", merge);
+                    println!("  Output: {}", output_path);
                 }
             }
         }

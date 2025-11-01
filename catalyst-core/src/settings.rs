@@ -31,7 +31,29 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
+
+/// Constants for Claude Code settings validation
+pub mod constants {
+    /// Hook type: command
+    pub const HOOK_TYPE_COMMAND: &str = "command";
+
+    /// All valid hook types
+    pub const VALID_HOOK_TYPES: &[&str] = &[HOOK_TYPE_COMMAND];
+
+    /// Hook event: UserPromptSubmit
+    pub const EVENT_USER_PROMPT_SUBMIT: &str = "UserPromptSubmit";
+
+    /// Hook event: PostToolUse
+    pub const EVENT_POST_TOOL_USE: &str = "PostToolUse";
+
+    /// Hook event: Stop
+    pub const EVENT_STOP: &str = "Stop";
+
+    /// All valid hook events (from Claude Code documentation)
+    pub const VALID_EVENTS: &[&str] = &[EVENT_USER_PROMPT_SUBMIT, EVENT_POST_TOOL_USE, EVENT_STOP];
+}
 
 /// Root settings structure for Claude Code
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -110,17 +132,47 @@ impl ClaudeSettings {
 
     /// Write settings to a JSON file with pretty formatting
     ///
+    /// Uses atomic write (temp file + rename) to prevent corruption if write fails.
+    /// Creates parent directories if they don't exist.
+    ///
     /// # Arguments
     ///
     /// * `path` - Path where settings.json will be written
     ///
     /// # Errors
     ///
-    /// Returns error if serialization fails or file cannot be written
+    /// Returns error if serialization fails, parent directory cannot be created,
+    /// or file cannot be written
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
         let json = serde_json::to_string_pretty(self).context("Failed to serialize settings")?;
 
-        fs::write(path.as_ref(), json).context("Failed to write settings file")?;
+        // Create parent directories if they don't exist
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).context("Failed to create parent directories")?;
+        }
+
+        // Atomic write using temp file + rename
+        let temp_path = path.with_extension("tmp");
+
+        // Write to temp file first
+        let mut temp_file =
+            fs::File::create(&temp_path).context("Failed to create temporary file")?;
+
+        temp_file
+            .write_all(json.as_bytes())
+            .context("Failed to write to temporary file")?;
+
+        // Ensure data is flushed to disk
+        temp_file
+            .sync_all()
+            .context("Failed to sync temporary file")?;
+
+        // Drop the file handle before rename
+        drop(temp_file);
+
+        // Atomic rename (POSIX guarantees atomicity)
+        fs::rename(&temp_path, path).context("Failed to rename temporary file")?;
 
         Ok(())
     }
@@ -203,16 +255,28 @@ impl ClaudeSettings {
     /// Validate the settings structure
     ///
     /// Checks:
+    /// - Hook event names are valid Claude Code events
     /// - Hook matcher patterns are valid regex
     /// - Hook arrays are not empty
     /// - Hook types are supported
     ///
     /// # Errors
     ///
-    /// Returns error if validation fails
+    /// Returns error if validation fails, with helpful messages showing valid options
     pub fn validate(&self) -> Result<()> {
+        use constants::*;
+
         // Validate hooks
         for (event, configs) in &self.hooks {
+            // Validate event name
+            if !VALID_EVENTS.contains(&event.as_str()) {
+                anyhow::bail!(
+                    "Unknown event '{}'. Valid events: {}",
+                    event,
+                    VALID_EVENTS.join(", ")
+                );
+            }
+
             for config in configs {
                 // Validate matcher is valid regex if present
                 if let Some(ref matcher) = config.matcher {
@@ -229,8 +293,13 @@ impl ClaudeSettings {
 
                 // Validate hook types
                 for hook in &config.hooks {
-                    if hook.r#type != "command" {
-                        anyhow::bail!("Unknown hook type '{}' in {} event", hook.r#type, event);
+                    if !VALID_HOOK_TYPES.contains(&hook.r#type.as_str()) {
+                        anyhow::bail!(
+                            "Unknown hook type '{}' in {} event. Valid types: {}",
+                            hook.r#type,
+                            event,
+                            VALID_HOOK_TYPES.join(", ")
+                        );
                     }
                 }
             }
@@ -473,5 +542,121 @@ mod tests {
         let parsed: ClaudeSettings = serde_json::from_str(&json).unwrap();
 
         assert_eq!(settings, parsed);
+    }
+
+    // Integration tests for file I/O
+    mod integration {
+        use super::*;
+        use tempfile::TempDir;
+
+        #[test]
+        fn test_write_read_roundtrip() {
+            let temp_dir = TempDir::new().unwrap();
+            let settings_path = temp_dir.path().join("settings.json");
+
+            let mut settings = ClaudeSettings::default();
+            settings.enable_all_project_mcp_servers = true;
+            settings.enabled_mcpjson_servers.push("mysql".to_string());
+            settings.add_hook(
+                "UserPromptSubmit",
+                HookConfig {
+                    matcher: Some("Edit|Write".to_string()),
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: "test.sh".to_string(),
+                    }],
+                },
+            );
+
+            // Write settings
+            settings.write(&settings_path).unwrap();
+
+            // Read back
+            let loaded = ClaudeSettings::read(&settings_path).unwrap();
+
+            assert_eq!(settings, loaded);
+        }
+
+        #[test]
+        fn test_parent_directory_creation() {
+            let temp_dir = TempDir::new().unwrap();
+            let nested_path = temp_dir.path().join("nested/deep/path/settings.json");
+
+            let settings = ClaudeSettings::default();
+
+            // Should create all parent directories
+            settings.write(&nested_path).unwrap();
+
+            assert!(nested_path.exists());
+
+            // Verify it can be read back
+            let loaded = ClaudeSettings::read(&nested_path).unwrap();
+            assert_eq!(settings, loaded);
+        }
+
+        #[test]
+        fn test_read_nonexistent_file() {
+            let temp_dir = TempDir::new().unwrap();
+            let nonexistent = temp_dir.path().join("does-not-exist.json");
+
+            let result = ClaudeSettings::read(&nonexistent);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Failed to read"));
+        }
+
+        #[test]
+        fn test_read_invalid_json() {
+            let temp_dir = TempDir::new().unwrap();
+            let invalid_json_path = temp_dir.path().join("invalid.json");
+
+            // Write invalid JSON
+            fs::write(&invalid_json_path, "{ this is not valid json }").unwrap();
+
+            let result = ClaudeSettings::read(&invalid_json_path);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Failed to parse"));
+        }
+
+        #[test]
+        fn test_overwrite_existing_file() {
+            let temp_dir = TempDir::new().unwrap();
+            let settings_path = temp_dir.path().join("settings.json");
+
+            // Write initial settings
+            let mut settings1 = ClaudeSettings::default();
+            settings1.enabled_mcpjson_servers.push("mysql".to_string());
+            settings1.write(&settings_path).unwrap();
+
+            // Overwrite with new settings
+            let mut settings2 = ClaudeSettings::default();
+            settings2
+                .enabled_mcpjson_servers
+                .push("playwright".to_string());
+            settings2.write(&settings_path).unwrap();
+
+            // Verify new settings were written
+            let loaded = ClaudeSettings::read(&settings_path).unwrap();
+            assert_eq!(loaded.enabled_mcpjson_servers.len(), 1);
+            assert_eq!(loaded.enabled_mcpjson_servers[0], "playwright");
+        }
+
+        #[test]
+        fn test_atomic_write_no_partial_files() {
+            let temp_dir = TempDir::new().unwrap();
+            let settings_path = temp_dir.path().join("settings.json");
+
+            let settings = ClaudeSettings::default();
+            settings.write(&settings_path).unwrap();
+
+            // Check no temp files left behind
+            let entries: Vec<_> = fs::read_dir(temp_dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .collect();
+
+            // Should only be settings.json, no .tmp files
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].file_name(), "settings.json");
+        }
     }
 }
