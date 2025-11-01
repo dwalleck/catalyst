@@ -6,7 +6,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};
-use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
@@ -240,7 +239,7 @@ fn analyze_file(path: &str) -> FileAnalysis {
     }
 }
 
-fn extract_file_path(tool: &str, args: &HashMap<String, serde_json::Value>) -> Option<String> {
+fn extract_file_path(_tool: &str, args: &HashMap<String, serde_json::Value>) -> Option<String> {
     args.get("file_path")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -268,7 +267,10 @@ fn main() -> Result<()> {
 
                 // Debug output
                 if std::env::var("DEBUG_HOOKS").is_ok() {
-                    eprintln!("[Rust/SQLite] Tracked: {file_path} ({})", get_file_category(&file_path));
+                    eprintln!(
+                        "[Rust/SQLite] Tracked: {file_path} ({})",
+                        get_file_category(&file_path)
+                    );
                 }
             }
         }

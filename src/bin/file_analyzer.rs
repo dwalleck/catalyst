@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::Path;
 use std::time::Instant;
 use walkdir::WalkDir;
@@ -13,26 +13,28 @@ struct FileAnalysis {
     has_prisma: bool,
     has_controller: bool,
     has_api_call: bool,
-    line_count: usize,
 }
 
 fn get_file_category(path: &str) -> &str {
     if path.contains("/frontend/")
         || path.contains("/client/")
         || path.contains("/src/components/")
-        || path.contains("/src/features/") {
+        || path.contains("/src/features/")
+    {
         "frontend"
     } else if path.contains("/src/controllers/")
         || path.contains("/src/services/")
         || path.contains("/src/routes/")
         || path.contains("/src/api/")
         || path.contains("/backend/")
-        || path.contains("/server/") {
+        || path.contains("/server/")
+    {
         "backend"
     } else if path.contains("/database/")
         || path.contains("/prisma/")
         || path.contains("/migrations/")
-        || path.ends_with(".sql") {
+        || path.ends_with(".sql")
+    {
         "database"
     } else {
         "other"
@@ -48,7 +50,8 @@ fn should_analyze(path: &str) -> bool {
         || path_lower.contains(".config.")
         || path_lower.contains("/types/")
         || path_lower.ends_with(".json")
-        || path_lower.ends_with(".md") {
+        || path_lower.ends_with(".md")
+    {
         return false;
     }
 
@@ -63,13 +66,13 @@ fn should_analyze(path: &str) -> bool {
 
 fn analyze_file(path: &Path) -> io::Result<FileAnalysis> {
     let content = fs::read_to_string(path)?;
-    let lines: Vec<&str> = content.lines().collect();
 
     // Pre-compile regex patterns for efficiency
     let try_regex = Regex::new(r"try\s*\{|try:|except:").unwrap();
     let async_regex = Regex::new(r"async\s+|async def|async fn|Task<").unwrap();
     let prisma_regex = Regex::new(r"prisma\.|PrismaClient|findMany|findUnique|create\(").unwrap();
-    let controller_regex = Regex::new(r"Controller|router\.|app\.(get|post|put|delete)|HttpGet|HttpPost").unwrap();
+    let controller_regex =
+        Regex::new(r"Controller|router\.|app\.(get|post|put|delete)|HttpGet|HttpPost").unwrap();
     let api_regex = Regex::new(r"fetch\(|axios\.|HttpClient|apiClient\.").unwrap();
 
     Ok(FileAnalysis {
@@ -78,7 +81,6 @@ fn analyze_file(path: &Path) -> io::Result<FileAnalysis> {
         has_prisma: prisma_regex.is_match(&content),
         has_controller: controller_regex.is_match(&content),
         has_api_call: api_regex.is_match(&content),
-        line_count: lines.len(),
     })
 }
 
@@ -123,16 +125,28 @@ fn main() -> io::Result<()> {
         }
 
         if let Ok(analysis) = analyze_file(path) {
-            if analysis.has_async { stats.async_files += 1; }
-            if analysis.has_try_catch { stats.try_catch_files += 1; }
-            if analysis.has_prisma { stats.prisma_files += 1; }
-            if analysis.has_controller { stats.controller_files += 1; }
-            if analysis.has_api_call { stats.api_call_files += 1; }
+            if analysis.has_async {
+                stats.async_files += 1;
+            }
+            if analysis.has_try_catch {
+                stats.try_catch_files += 1;
+            }
+            if analysis.has_prisma {
+                stats.prisma_files += 1;
+            }
+            if analysis.has_controller {
+                stats.controller_files += 1;
+            }
+            if analysis.has_api_call {
+                stats.api_call_files += 1;
+            }
 
             // Flag risky patterns
             if analysis.has_async && !analysis.has_try_catch {
-                println!("⚠️  {} - Async without try/catch",
-                    path.file_name().unwrap().to_string_lossy());
+                println!(
+                    "⚠️  {} - Async without try/catch",
+                    path.file_name().unwrap().to_string_lossy()
+                );
             }
         }
     }

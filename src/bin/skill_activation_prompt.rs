@@ -1,16 +1,16 @@
-use serde::{Deserialize, Serialize};
+use regex::Regex;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, Read};
-use regex::Regex;
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
-    session_id: String,
-    transcript_path: String,
-    cwd: String,
-    permission_mode: String,
+    _session_id: String,
+    _transcript_path: String,
+    _cwd: String,
+    _permission_mode: String,
     prompt: String,
 }
 
@@ -24,8 +24,9 @@ struct PromptTriggers {
 
 #[derive(Debug, Deserialize)]
 struct SkillRule {
-    r#type: String,
-    enforcement: String,
+    #[serde(rename = "type")]
+    r#_type: String,
+    _enforcement: String,
     priority: String,
     #[serde(rename = "promptTriggers")]
     prompt_triggers: Option<PromptTriggers>,
@@ -33,14 +34,14 @@ struct SkillRule {
 
 #[derive(Debug, Deserialize)]
 struct SkillRules {
-    version: String,
+    _version: String,
     skills: HashMap<String, SkillRule>,
 }
 
 #[derive(Debug)]
 struct MatchedSkill {
     name: String,
-    match_type: String,
+    _match_type: String,
     priority: String,
 }
 
@@ -49,14 +50,14 @@ fn main() -> io::Result<()> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
-    let data: HookInput = serde_json::from_str(&input)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let data: HookInput =
+        serde_json::from_str(&input).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     let prompt = data.prompt.to_lowercase();
 
     // Load skill rules
-    let project_dir = env::var("CLAUDE_PROJECT_DIR")
-        .unwrap_or_else(|_| String::from("/home/project"));
+    let project_dir =
+        env::var("CLAUDE_PROJECT_DIR").unwrap_or_else(|_| String::from("/home/project"));
     let rules_path = format!("{project_dir}/.claude/skills/skill-rules.json");
 
     let rules_content = fs::read_to_string(&rules_path)?;
@@ -69,27 +70,31 @@ fn main() -> io::Result<()> {
     for (skill_name, config) in &rules.skills {
         if let Some(triggers) = &config.prompt_triggers {
             // Keyword matching
-            let keyword_match = triggers.keywords.iter()
+            let keyword_match = triggers
+                .keywords
+                .iter()
                 .any(|kw| prompt.contains(&kw.to_lowercase()));
 
             if keyword_match {
                 matched_skills.push(MatchedSkill {
                     name: skill_name.clone(),
-                    match_type: "keyword".to_string(),
+                    _match_type: "keyword".to_string(),
                     priority: config.priority.clone(),
                 });
                 continue;
             }
 
             // Intent pattern matching
-            let intent_match = triggers.intent_patterns.iter()
+            let intent_match = triggers
+                .intent_patterns
+                .iter()
                 .filter_map(|pattern| Regex::new(pattern).ok())
                 .any(|regex| regex.is_match(&prompt));
 
             if intent_match {
                 matched_skills.push(MatchedSkill {
                     name: skill_name.clone(),
-                    match_type: "intent".to_string(),
+                    _match_type: "intent".to_string(),
                     priority: config.priority.clone(),
                 });
             }
@@ -103,16 +108,20 @@ fn main() -> io::Result<()> {
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
         // Group by priority
-        let critical: Vec<_> = matched_skills.iter()
+        let critical: Vec<_> = matched_skills
+            .iter()
             .filter(|s| s.priority == "critical")
             .collect();
-        let high: Vec<_> = matched_skills.iter()
+        let high: Vec<_> = matched_skills
+            .iter()
             .filter(|s| s.priority == "high")
             .collect();
-        let medium: Vec<_> = matched_skills.iter()
+        let medium: Vec<_> = matched_skills
+            .iter()
             .filter(|s| s.priority == "medium")
             .collect();
-        let low: Vec<_> = matched_skills.iter()
+        let low: Vec<_> = matched_skills
+            .iter()
             .filter(|s| s.priority == "low")
             .collect();
 
