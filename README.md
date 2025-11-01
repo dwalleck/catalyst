@@ -1,5 +1,7 @@
 # Catalyst
 
+[![CI](https://github.com/dwalleck/catalyst/workflows/CI/badge.svg)](https://github.com/dwalleck/catalyst/actions)
+
 **High-performance Rust hooks for Claude Code skill auto-activation**
 
 Born from 6 months of production use, Catalyst provides battle-tested Rust hooks that make Claude Code skills activate automatically based on context. ~2ms startup time, zero runtime dependencies.
