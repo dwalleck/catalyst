@@ -26,13 +26,14 @@ const SQL_UPDATE_OTHER: &str =
     "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1 WHERE session_id = ?2";
 
 /// Returns the home directory path in a cross-platform way
-/// On Windows: Uses USERPROFILE, falls back to HOME, then TEMP, then C:\Users\Default
+/// On Windows: Uses USERPROFILE, falls back to HOME, then TEMP, then LOCALAPPDATA, then C:\Users\Default
 /// On Unix/Linux/macOS: Uses HOME
 #[cfg(windows)]
 fn get_home_dir() -> PathBuf {
     env::var("USERPROFILE")
         .or_else(|_| env::var("HOME"))
         .or_else(|_| env::var("TEMP"))
+        .or_else(|_| env::var("LOCALAPPDATA"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Default"))
 }
