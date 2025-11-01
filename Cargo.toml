@@ -22,6 +22,12 @@ anyhow = "1.0"
 once_cell = "1.19"
 walkdir = "2.4"
 
+# CLI improvements (Phase 2.4)
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "2.1"
+
 # Performance optimizations (Phase 2.5)
 ignore = "0.4"              # .gitignore support (respects .gitignore files)
 globset = "0.4"             # Efficient glob pattern matching
@@ -32,6 +38,9 @@ aho-corasick = "1.1"        # Multi-pattern string matching (optional feature)
 # SQLite (optional feature)
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = "0.4"
+
+# Pre-commit hooks (installs automatically on cargo build)
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 
 [profile.release]
 opt-level = 3        # Maximum optimization

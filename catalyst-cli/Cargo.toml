@@ -19,6 +19,12 @@ anyhow = { workspace = true }
 once_cell = { workspace = true }
 walkdir = { workspace = true }
 
+# CLI improvements (Phase 2.4)
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+colored = { workspace = true }
+
 # Performance optimizations (Phase 2.5)
 ignore = { workspace = true }
 globset = { workspace = true }
@@ -31,6 +37,10 @@ aho-corasick = { workspace = true, optional = true }
 # SQLite feature dependencies
 rusqlite = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Pre-commit hooks (installs automatically on cargo build)
+cargo-husky = { workspace = true }
 
 [features]
 default = []
