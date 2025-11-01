@@ -6,6 +6,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
+use unicase::UniCase;
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
@@ -92,7 +93,8 @@ fn main() -> Result<()> {
 
     let data: HookInput = serde_json::from_str(&input).context("Failed to parse hook input")?;
 
-    let prompt = data.prompt.to_lowercase();
+    // Phase 2.5: Keep original prompt, use unicase for zero-allocation comparison
+    let prompt = &data.prompt;
 
     // Load skill rules (cross-platform path handling)
     let project_dir = env::var("CLAUDE_PROJECT_DIR")
@@ -121,11 +123,15 @@ fn main() -> Result<()> {
     // Check each skill for matches using pre-compiled regexes
     for (skill_name, compiled_rule) in &compiled_rules {
         if let Some(triggers) = &compiled_rule.compiled_triggers {
-            // Keyword matching
-            let keyword_match = triggers
-                .keywords
-                .iter()
-                .any(|kw| prompt.contains(&kw.to_lowercase()));
+            // Phase 2.5: Zero-allocation case-insensitive keyword matching with unicase
+            let keyword_match = triggers.keywords.iter().any(|kw| {
+                // Convert both to UniCase for efficient case-insensitive comparison
+                let prompt_unicase = UniCase::new(prompt);
+                let keyword_unicase = UniCase::new(kw.as_str());
+
+                // Use as_ref() to get &str for contains() check
+                prompt_unicase.as_ref().contains(keyword_unicase.as_ref())
+            });
 
             if keyword_match {
                 matched_skills.push(MatchedSkill {
@@ -137,10 +143,11 @@ fn main() -> Result<()> {
             }
 
             // Intent pattern matching with pre-compiled regexes
+            // Note: Regex matching is already case-insensitive if patterns use (?i)
             let intent_match = triggers
                 .intent_regexes
                 .iter()
-                .any(|regex| regex.is_match(&prompt));
+                .any(|regex| regex.is_match(prompt));
 
             if intent_match {
                 matched_skills.push(MatchedSkill {

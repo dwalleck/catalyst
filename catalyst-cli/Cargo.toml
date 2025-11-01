@@ -19,6 +19,15 @@ anyhow = { workspace = true }
 once_cell = { workspace = true }
 walkdir = { workspace = true }
 
+# Performance optimizations (Phase 2.5)
+ignore = { workspace = true }
+globset = { workspace = true }
+unicase = { workspace = true }
+
+# Optional performance features
+rayon = { workspace = true, optional = true }
+aho-corasick = { workspace = true, optional = true }
+
 # SQLite feature dependencies
 rusqlite = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
@@ -26,6 +35,8 @@ chrono = { workspace = true, optional = true }
 [features]
 default = []
 sqlite = ["dep:rusqlite", "dep:chrono"]
+parallel = ["dep:rayon"]
+fast-patterns = ["dep:aho-corasick"]
 
 # Binary definitions
 [[bin]]
