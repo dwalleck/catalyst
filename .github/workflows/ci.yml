@@ -70,8 +70,5 @@ jobs:
           chmod +x install.sh
           ./install.sh --help
 
-      - name: Test install script (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          .\install.ps1 -Help
+      # Note: Windows install.ps1 will be added in Phase 2.7
+      # For now, we verify Windows build/test but skip install script
