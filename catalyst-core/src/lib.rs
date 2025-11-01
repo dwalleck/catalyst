@@ -7,7 +7,5 @@
 //! - Shared utilities
 //! - Common data structures
 
-// Phase 2.6: Settings module will be added here
-// pub mod settings;
-
-// Placeholder for future modules
+// Phase 2.6: Settings management
+pub mod settings;
