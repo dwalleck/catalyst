@@ -142,34 +142,15 @@ impl Database {
             )?;
         }
 
-        // Update session
-        let category_col = match category {
-            "backend" => "backend_files",
-            "frontend" => "frontend_files",
-            "database" => "database_files",
-            _ => "",
+        // Update session using const SQL strings (no string interpolation for safety)
+        let sql = match category {
+            "backend" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, backend_files = backend_files + 1 WHERE session_id = ?2",
+            "frontend" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, frontend_files = frontend_files + 1 WHERE session_id = ?2",
+            "database" => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1, database_files = database_files + 1 WHERE session_id = ?2",
+            _ => "UPDATE sessions SET last_activity = ?1, total_files = total_files + 1 WHERE session_id = ?2",
         };
 
-        if !category_col.is_empty() {
-            self.conn.execute(
-                &format!(
-                    "UPDATE sessions
-                     SET last_activity = ?1,
-                         total_files = total_files + 1,
-                         {category_col} = {category_col} + 1
-                     WHERE session_id = ?2"
-                ),
-                params![&now, session_id],
-            )?;
-        } else {
-            self.conn.execute(
-                "UPDATE sessions
-                 SET last_activity = ?1,
-                     total_files = total_files + 1
-                 WHERE session_id = ?2",
-                params![&now, session_id],
-            )?;
-        }
+        self.conn.execute(sql, params![&now, session_id])?;
 
         Ok(())
     }
