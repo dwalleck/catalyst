@@ -351,3 +351,322 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_get_file_category_frontend() {
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/frontend/App.tsx")),
+            "frontend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/client/Button.tsx")),
+            "frontend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/src/components/Header.tsx")),
+            "frontend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/features/auth/Login.tsx")),
+            "frontend"
+        );
+    }
+
+    #[test]
+    fn test_get_file_category_backend() {
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/controllers/UserController.ts")),
+            "backend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/services/AuthService.ts")),
+            "backend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/routes/api.ts")),
+            "backend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/backend/server.ts")),
+            "backend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/server/index.ts")),
+            "backend"
+        );
+    }
+
+    #[test]
+    fn test_get_file_category_database() {
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/database/schema.sql")),
+            "database"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/prisma/schema.prisma")),
+            "database"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/migrations/001_init.sql")),
+            "database"
+        );
+        // SQL files are categorized as database regardless of path
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/queries/user.sql")),
+            "database"
+        );
+    }
+
+    #[test]
+    fn test_get_file_category_other() {
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/utils/helpers.ts")),
+            "other"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/lib/logger.ts")),
+            "other"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("/project/README.md")),
+            "other"
+        );
+    }
+
+    #[test]
+    fn test_should_analyze_valid_extensions() {
+        assert!(should_analyze(&PathBuf::from("/project/app.ts")));
+        assert!(should_analyze(&PathBuf::from("/project/Component.tsx")));
+        assert!(should_analyze(&PathBuf::from("/project/script.js")));
+        assert!(should_analyze(&PathBuf::from("/project/App.jsx")));
+        assert!(should_analyze(&PathBuf::from("/project/main.rs")));
+        assert!(should_analyze(&PathBuf::from("/project/program.cs")));
+        assert!(should_analyze(&PathBuf::from("/project/script.py")));
+    }
+
+    #[test]
+    fn test_should_analyze_skip_test_files() {
+        assert!(!should_analyze(&PathBuf::from("/project/app.test.ts")));
+        assert!(!should_analyze(&PathBuf::from(
+            "/project/Component.spec.tsx"
+        )));
+        assert!(!should_analyze(&PathBuf::from("/project/test.spec.js")));
+    }
+
+    #[test]
+    fn test_should_analyze_skip_config_files() {
+        assert!(!should_analyze(&PathBuf::from(
+            "/project/webpack.config.js"
+        )));
+        assert!(!should_analyze(&PathBuf::from("/project/tsconfig.json")));
+        assert!(!should_analyze(&PathBuf::from("/project/README.md")));
+    }
+
+    #[test]
+    fn test_async_regex() {
+        let code_with_async = "async function fetchData() { return data; }";
+        assert!(ASYNC_REGEX.is_match(code_with_async));
+
+        let code_with_async_arrow = "const fetch = async () => { return data; }";
+        assert!(ASYNC_REGEX.is_match(code_with_async_arrow));
+
+        let code_without_async = "function getData() { return data; }";
+        assert!(!ASYNC_REGEX.is_match(code_without_async));
+    }
+
+    #[test]
+    fn test_async_regex_edge_cases() {
+        // Test with varied whitespace
+        assert!(ASYNC_REGEX.is_match("async  function test() {}"));
+        assert!(ASYNC_REGEX.is_match("async\tfunction test() {}"));
+        assert!(ASYNC_REGEX.is_match("async\nfunction test() {}"));
+
+        // Test in comments (should still match - this is expected behavior)
+        assert!(ASYNC_REGEX.is_match("// async function in comment"));
+
+        // Test partial matches - asyncFunction without space doesn't match
+        assert!(!ASYNC_REGEX.is_match("asyncFunction() {}"));
+        // Note: "myasync function" WILL match because "async " appears in it
+        // This is acceptable behavior - we're looking for the async keyword pattern
+
+        // Test TypeScript async patterns
+        assert!(ASYNC_REGEX.is_match("async def process():"));
+        assert!(ASYNC_REGEX.is_match("async fn handler() ->"));
+        assert!(ASYNC_REGEX.is_match("Task<string> result"));
+    }
+
+    #[test]
+    fn test_try_regex() {
+        // Test all branches: try\s*\{|try:|except:
+
+        // Branch 1: try\s*\{ (JavaScript/Java try blocks)
+        let code_with_try = "try { doSomething(); } catch (e) { handleError(e); }";
+        assert!(TRY_REGEX.is_match(code_with_try));
+        assert!(TRY_REGEX.is_match("try{ noSpace(); }")); // No space before brace
+
+        // Branch 2: try: (Python try)
+        let code_with_python_try = "try:\n    do_something()\nexcept Exception as e:\n    pass";
+        assert!(TRY_REGEX.is_match(code_with_python_try));
+
+        // Branch 3: except: (Python bare except block)
+        assert!(TRY_REGEX.is_match("except:\n    pass"));
+        assert!(TRY_REGEX.is_match("    except:")); // Indented except
+
+        let code_without_try = "function process() { return result; }";
+        assert!(!TRY_REGEX.is_match(code_without_try));
+    }
+
+    #[test]
+    fn test_prisma_regex() {
+        // Test all branches: prisma\.|PrismaClient|findMany|findUnique|create\(
+
+        // Branch 1: prisma. (Prisma client method calls)
+        let code_with_prisma = "const user = await prisma.user.findUnique({ where: { id } });";
+        assert!(PRISMA_REGEX.is_match(code_with_prisma));
+
+        // Branch 2: PrismaClient (client instantiation)
+        assert!(PRISMA_REGEX.is_match("const prisma = new PrismaClient();"));
+        assert!(PRISMA_REGEX.is_match("import { PrismaClient } from '@prisma/client';"));
+
+        // Branch 3: findMany (query method)
+        assert!(PRISMA_REGEX.is_match("const users = await findMany({ where: { active: true } });"));
+
+        // Branch 4: findUnique (query method)
+        assert!(PRISMA_REGEX.is_match("const user = await findUnique({ where: { id } });"));
+
+        // Branch 5: create( (create method)
+        let code_with_prisma_create = "const post = await prisma.post.create({ data: { title } });";
+        assert!(PRISMA_REGEX.is_match(code_with_prisma_create));
+
+        let code_without_prisma = "const user = await database.query('SELECT * FROM users');";
+        assert!(!PRISMA_REGEX.is_match(code_without_prisma));
+    }
+
+    #[test]
+    fn test_controller_regex() {
+        // Test all branches: Controller|router\.|app\.(get|post|put|delete)|HttpGet|HttpPost
+
+        // Branch 1: Controller (controller classes)
+        let code_with_controller = "export class UserController { }";
+        assert!(CONTROLLER_REGEX.is_match(code_with_controller));
+
+        // Branch 2: router. (router method calls)
+        let code_with_router = "router.get('/users', (req, res) => { });";
+        assert!(CONTROLLER_REGEX.is_match(code_with_router));
+
+        // Branch 3: app.(get|post|put|delete) (Express app methods)
+        assert!(CONTROLLER_REGEX.is_match("app.get('/api/users', handler);"));
+        assert!(CONTROLLER_REGEX.is_match("app.post('/api/users', handler);"));
+        assert!(CONTROLLER_REGEX.is_match("app.put('/api/users/:id', handler);"));
+        assert!(CONTROLLER_REGEX.is_match("app.delete('/api/users/:id', handler);"));
+
+        // Branch 4: HttpGet (HTTP decorators)
+        assert!(CONTROLLER_REGEX.is_match("@HttpGet('/users')"));
+
+        // Branch 5: HttpPost (HTTP decorators)
+        assert!(CONTROLLER_REGEX.is_match("@HttpPost('/users')"));
+
+        let code_without_controller = "const helpers = { format: () => {} };";
+        assert!(!CONTROLLER_REGEX.is_match(code_without_controller));
+    }
+
+    #[test]
+    fn test_api_regex() {
+        // Test all branches: fetch\(|axios\.|HttpClient|apiClient\.
+
+        // Branch 1: fetch( (Fetch API)
+        let code_with_fetch = "const response = await fetch('/api/users');";
+        assert!(API_REGEX.is_match(code_with_fetch));
+
+        // Branch 2: axios. (Axios library)
+        let code_with_axios = "const data = await axios.get('/api/data');";
+        assert!(API_REGEX.is_match(code_with_axios));
+
+        // Branch 3: HttpClient (HTTP client class)
+        assert!(API_REGEX.is_match("const client = new HttpClient();"));
+        assert!(API_REGEX.is_match("private readonly HttpClient httpClient;"));
+
+        // Branch 4: apiClient. (custom API client)
+        assert!(API_REGEX.is_match("const data = await apiClient.get('/users');"));
+        assert!(API_REGEX.is_match("apiClient.post('/api/create', body);"));
+
+        let code_without_api = "const result = processData(input);";
+        assert!(!API_REGEX.is_match(code_without_api));
+    }
+
+    #[test]
+    fn test_file_analysis_default() {
+        let analysis = FileAnalysis::default();
+        assert!(!analysis.has_try_catch);
+        assert!(!analysis.has_async);
+        assert!(!analysis.has_prisma);
+        assert!(!analysis.has_controller);
+        assert!(!analysis.has_api_call);
+    }
+
+    #[test]
+    fn test_stats_default() {
+        let stats = Stats::default();
+        assert_eq!(stats.total_files, 0);
+        assert_eq!(stats.backend_files, 0);
+        assert_eq!(stats.frontend_files, 0);
+        assert_eq!(stats.database_files, 0);
+        assert_eq!(stats.other_files, 0);
+        assert_eq!(stats.async_files, 0);
+        assert_eq!(stats.try_catch_files, 0);
+        assert_eq!(stats.failed_files, 0);
+    }
+
+    #[test]
+    fn test_get_file_category_windows_paths() {
+        // Note: On Windows, Rust PathBuf automatically handles both / and \ as separators
+        // On Unix, only / is treated as a separator, so we use forward slashes for cross-platform tests
+
+        // Windows paths with forward slashes (works on all platforms)
+        assert_eq!(
+            get_file_category(&PathBuf::from("C:/project/frontend/App.tsx")),
+            "frontend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("C:/project/controllers/UserController.ts")),
+            "backend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("C:/project/database/schema.sql")),
+            "database"
+        );
+
+        // UNC paths (Windows network paths)
+        assert_eq!(
+            get_file_category(&PathBuf::from("//storage/share/frontend/App.tsx")),
+            "frontend"
+        );
+    }
+
+    #[test]
+    fn test_should_analyze_windows_paths() {
+        // Note: Using forward slashes for cross-platform compatibility
+        // On Windows, Rust automatically normalizes these
+
+        // Windows paths with drive letters
+        assert!(should_analyze(&PathBuf::from("C:/project/app.ts")));
+        assert!(should_analyze(&PathBuf::from("C:/Users/dev/Component.tsx")));
+
+        // Skip test files on Windows paths
+        assert!(!should_analyze(&PathBuf::from("C:/project/app.test.ts")));
+        assert!(!should_analyze(&PathBuf::from(
+            "D:/code/Component.spec.tsx"
+        )));
+
+        // UNC paths (Windows network paths)
+        assert!(should_analyze(&PathBuf::from("//storage/share/app.ts")));
+        assert!(!should_analyze(&PathBuf::from(
+            "//storage/share/app.test.ts"
+        )));
+    }
+}
