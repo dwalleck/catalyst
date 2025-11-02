@@ -11,9 +11,13 @@ use tracing::debug;
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
+    #[serde(rename = "session_id")]
     _session_id: String,
+    #[serde(rename = "transcript_path")]
     _transcript_path: String,
+    #[serde(rename = "cwd")]
     _cwd: String,
+    #[serde(rename = "permission_mode")]
     _permission_mode: String,
     prompt: String,
 }
@@ -58,6 +62,7 @@ impl CompiledTriggers {
 struct SkillRule {
     #[serde(rename = "type")]
     r#_type: String,
+    #[serde(rename = "enforcement")]
     _enforcement: String,
     priority: String,
     #[serde(rename = "promptTriggers")]
@@ -83,6 +88,7 @@ impl CompiledSkillRule {
 
 #[derive(Debug, Deserialize)]
 struct SkillRules {
+    #[serde(rename = "version")]
     _version: String,
     skills: HashMap<String, SkillRule>,
 }
@@ -242,4 +248,214 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keyword_matching_case_insensitive() {
+        let triggers = PromptTriggers {
+            keywords: vec!["backend".to_string(), "API".to_string()],
+            intent_patterns: vec![],
+        };
+
+        let compiled = CompiledTriggers::from_triggers(&triggers);
+
+        // Test lowercase keyword
+        assert!(compiled
+            .keywords_lower
+            .iter()
+            .any(|kw| "create a backend service".to_lowercase().contains(kw)));
+
+        // Test uppercase keyword match
+        assert!(compiled
+            .keywords_lower
+            .iter()
+            .any(|kw| "BUILD AN API ENDPOINT".to_lowercase().contains(kw)));
+
+        // Test mixed case
+        assert!(compiled
+            .keywords_lower
+            .iter()
+            .any(|kw| "Add Backend logic".to_lowercase().contains(kw)));
+
+        // Test non-match
+        assert!(!compiled
+            .keywords_lower
+            .iter()
+            .any(|kw| "frontend component".to_lowercase().contains(kw)));
+    }
+
+    #[test]
+    fn test_intent_pattern_matching() {
+        let triggers = PromptTriggers {
+            keywords: vec![],
+            intent_patterns: vec![
+                r"(?i)create.*controller".to_string(),
+                r"(?i)add.*route".to_string(),
+            ],
+        };
+
+        let compiled = CompiledTriggers::from_triggers(&triggers);
+
+        // Test first pattern
+        assert!(compiled
+            .intent_regexes
+            .iter()
+            .any(|r| r.is_match("create a new controller")));
+
+        // Test case insensitivity
+        assert!(compiled
+            .intent_regexes
+            .iter()
+            .any(|r| r.is_match("CREATE USER CONTROLLER")));
+
+        // Test second pattern
+        assert!(compiled
+            .intent_regexes
+            .iter()
+            .any(|r| r.is_match("add a new route for users")));
+
+        // Test non-match
+        assert!(!compiled
+            .intent_regexes
+            .iter()
+            .any(|r| r.is_match("delete a component")));
+    }
+
+    #[test]
+    fn test_compiled_triggers_from_triggers() {
+        let triggers = PromptTriggers {
+            keywords: vec!["Backend".to_string(), "API".to_string()],
+            intent_patterns: vec![r"test.*pattern".to_string()],
+        };
+
+        let compiled = CompiledTriggers::from_triggers(&triggers);
+
+        // Verify keywords are lowercased
+        assert_eq!(compiled.keywords_lower.len(), 2);
+        assert_eq!(compiled.keywords_lower[0], "backend");
+        assert_eq!(compiled.keywords_lower[1], "api");
+
+        // Verify regex compiled
+        assert_eq!(compiled.intent_regexes.len(), 1);
+    }
+
+    #[test]
+    fn test_invalid_regex_patterns_are_skipped() {
+        let triggers = PromptTriggers {
+            keywords: vec![],
+            intent_patterns: vec![
+                r"(?i)valid.*pattern".to_string(),
+                r"[invalid(".to_string(), // Invalid regex
+                r"(?i)another.*valid".to_string(),
+            ],
+        };
+
+        let compiled = CompiledTriggers::from_triggers(&triggers);
+
+        // Should only have 2 valid regexes (invalid one skipped)
+        assert_eq!(compiled.intent_regexes.len(), 2);
+    }
+
+    #[test]
+    fn test_empty_triggers() {
+        let triggers = PromptTriggers {
+            keywords: vec![],
+            intent_patterns: vec![],
+        };
+
+        let compiled = CompiledTriggers::from_triggers(&triggers);
+
+        assert_eq!(compiled.keywords_lower.len(), 0);
+        assert_eq!(compiled.intent_regexes.len(), 0);
+    }
+
+    #[test]
+    fn test_compiled_skill_rule_creation() {
+        let rule = SkillRule {
+            r#_type: "UserPromptSubmit".to_string(),
+            _enforcement: "suggest".to_string(),
+            priority: "high".to_string(),
+            prompt_triggers: Some(PromptTriggers {
+                keywords: vec!["test".to_string()],
+                intent_patterns: vec![],
+            }),
+        };
+
+        let compiled = CompiledSkillRule::from_rule(&rule);
+
+        assert_eq!(compiled.priority, "high");
+        assert!(compiled.compiled_triggers.is_some());
+    }
+
+    #[test]
+    fn test_compiled_skill_rule_without_triggers() {
+        let rule = SkillRule {
+            r#_type: "UserPromptSubmit".to_string(),
+            _enforcement: "suggest".to_string(),
+            priority: "medium".to_string(),
+            prompt_triggers: None,
+        };
+
+        let compiled = CompiledSkillRule::from_rule(&rule);
+
+        assert_eq!(compiled.priority, "medium");
+        assert!(compiled.compiled_triggers.is_none());
+    }
+
+    #[test]
+    fn test_hook_input_deserialization() {
+        let json = r#"{
+            "session_id": "test-123",
+            "transcript_path": "/path/to/transcript",
+            "cwd": "/project",
+            "permission_mode": "normal",
+            "prompt": "create a backend service"
+        }"#;
+
+        let result: Result<HookInput, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        let input = result.unwrap();
+        assert_eq!(input.prompt, "create a backend service");
+    }
+
+    #[test]
+    fn test_malformed_json_input() {
+        let json = r#"{
+            "session_id": "test-123",
+            "invalid_field_structure
+        }"#;
+
+        let result: Result<HookInput, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_skill_rules_deserialization() {
+        let json = r#"{
+            "version": "1.0",
+            "skills": {
+                "backend-dev-guidelines": {
+                    "type": "UserPromptSubmit",
+                    "enforcement": "suggest",
+                    "priority": "high",
+                    "promptTriggers": {
+                        "keywords": ["backend", "API"],
+                        "intentPatterns": ["(?i)create.*controller"]
+                    }
+                }
+            }
+        }"#;
+
+        let result: Result<SkillRules, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        let rules = result.unwrap();
+        assert_eq!(rules.skills.len(), 1);
+        assert!(rules.skills.contains_key("backend-dev-guidelines"));
+    }
 }

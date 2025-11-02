@@ -356,3 +356,235 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_session_id_valid() {
+        assert!(validate_session_id("test-123").is_ok());
+        assert!(validate_session_id("session_456").is_ok());
+        assert!(validate_session_id("abc123-xyz789").is_ok());
+        assert!(validate_session_id("UPPERCASE").is_ok());
+        assert!(validate_session_id("lower-Case_123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_session_id_invalid_empty() {
+        assert!(validate_session_id("").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_invalid_length() {
+        let long_id = "a".repeat(256);
+        assert!(validate_session_id(&long_id).is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_invalid_characters() {
+        // Path traversal attempts
+        assert!(validate_session_id("../etc/passwd").is_err());
+        assert!(validate_session_id("..\\windows\\system32").is_err());
+
+        // Special characters
+        assert!(validate_session_id("session@123").is_err());
+        assert!(validate_session_id("session#123").is_err());
+        assert!(validate_session_id("session 123").is_err());
+        assert!(validate_session_id("session/123").is_err());
+        assert!(validate_session_id("session\\123").is_err());
+    }
+
+    #[test]
+    fn test_category_as_str() {
+        assert_eq!(Category::Backend.as_str(), "backend");
+        assert_eq!(Category::Frontend.as_str(), "frontend");
+        assert_eq!(Category::Database.as_str(), "database");
+        assert_eq!(Category::Other.as_str(), "other");
+    }
+
+    #[test]
+    fn test_category_sql_update() {
+        assert!(Category::Backend.sql_update().contains("backend_files"));
+        assert!(Category::Frontend.sql_update().contains("frontend_files"));
+        assert!(Category::Database.sql_update().contains("database_files"));
+        assert!(!Category::Other.sql_update().contains("backend_files"));
+    }
+
+    #[test]
+    fn test_get_file_category_frontend() {
+        assert!(matches!(
+            get_file_category("/project/frontend/App.tsx"),
+            Category::Frontend
+        ));
+        assert!(matches!(
+            get_file_category("/project/client/Button.tsx"),
+            Category::Frontend
+        ));
+        assert!(matches!(
+            get_file_category("/project/src/components/Header.tsx"),
+            Category::Frontend
+        ));
+        assert!(matches!(
+            get_file_category("/project/features/auth/Login.tsx"),
+            Category::Frontend
+        ));
+    }
+
+    #[test]
+    fn test_get_file_category_backend() {
+        assert!(matches!(
+            get_file_category("/project/controllers/UserController.ts"),
+            Category::Backend
+        ));
+        assert!(matches!(
+            get_file_category("/project/services/AuthService.ts"),
+            Category::Backend
+        ));
+        assert!(matches!(
+            get_file_category("/project/routes/api.ts"),
+            Category::Backend
+        ));
+        assert!(matches!(
+            get_file_category("/project/api/handlers.ts"),
+            Category::Backend
+        ));
+        assert!(matches!(
+            get_file_category("/project/backend/server.ts"),
+            Category::Backend
+        ));
+        assert!(matches!(
+            get_file_category("/project/server/index.ts"),
+            Category::Backend
+        ));
+    }
+
+    #[test]
+    fn test_get_file_category_database() {
+        assert!(matches!(
+            get_file_category("/project/database/schema.sql"),
+            Category::Database
+        ));
+        assert!(matches!(
+            get_file_category("/project/prisma/schema.prisma"),
+            Category::Database
+        ));
+        assert!(matches!(
+            get_file_category("/project/migrations/001_init.sql"),
+            Category::Database
+        ));
+    }
+
+    #[test]
+    fn test_get_file_category_other() {
+        assert!(matches!(
+            get_file_category("/project/utils/helpers.ts"),
+            Category::Other
+        ));
+        assert!(matches!(
+            get_file_category("/project/lib/logger.ts"),
+            Category::Other
+        ));
+        assert!(matches!(
+            get_file_category("/project/README.md"),
+            Category::Other
+        ));
+    }
+
+    #[test]
+    fn test_should_analyze_valid_files() {
+        assert!(should_analyze("/project/app.ts"));
+        assert!(should_analyze("/project/Component.tsx"));
+        assert!(should_analyze("/project/script.js"));
+        assert!(should_analyze("/project/App.jsx"));
+    }
+
+    #[test]
+    fn test_should_analyze_skip_test_files() {
+        assert!(!should_analyze("/project/app.test.ts"));
+        assert!(!should_analyze("/project/Component.spec.tsx"));
+        assert!(!should_analyze("/project/test.spec.js"));
+    }
+
+    #[test]
+    fn test_should_analyze_skip_non_code_files() {
+        assert!(!should_analyze("/project/README.md"));
+        assert!(!should_analyze("/project/config.json"));
+        assert!(!should_analyze("/project/styles.css"));
+    }
+
+    #[test]
+    fn test_extract_file_path_with_valid_path() {
+        let mut args = HashMap::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::Value::String("/project/test.ts".to_string()),
+        );
+
+        let result = extract_file_path("Edit", &args);
+        assert_eq!(result, Some("/project/test.ts".to_string()));
+    }
+
+    #[test]
+    fn test_extract_file_path_missing_key() {
+        let args = HashMap::new();
+        let result = extract_file_path("Edit", &args);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_file_path_non_string_value() {
+        let mut args = HashMap::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::Value::Number(123.into()),
+        );
+
+        let result = extract_file_path("Edit", &args);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_hook_input_deserialization() {
+        let json = r#"{
+            "session_id": "test-123",
+            "tool_name": "Edit",
+            "tool_args": {
+                "file_path": "/project/app.ts"
+            }
+        }"#;
+
+        let result: Result<HookInput, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        let input = result.unwrap();
+        assert_eq!(input.session_id, "test-123");
+        assert_eq!(input.tool_name, Some("Edit".to_string()));
+    }
+
+    #[test]
+    fn test_hook_input_optional_fields() {
+        let json = r#"{
+            "session_id": "test-123"
+        }"#;
+
+        let result: Result<HookInput, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        let input = result.unwrap();
+        assert_eq!(input.session_id, "test-123");
+        assert_eq!(input.tool_name, None);
+        assert_eq!(input.tool_args, None);
+    }
+
+    #[test]
+    fn test_file_analysis_default() {
+        let analysis = FileAnalysis::default();
+        assert!(!analysis.has_try_catch);
+        assert!(!analysis.has_async);
+        assert!(!analysis.has_prisma);
+        assert!(!analysis.has_controller);
+        assert!(!analysis.has_api_call);
+        assert_eq!(analysis.line_count, 0);
+    }
+}
