@@ -502,11 +502,20 @@ mod tests {
 
     #[test]
     fn test_try_regex() {
+        // Test all branches: try\s*\{|try:|except:
+
+        // Branch 1: try\s*\{ (JavaScript/Java try blocks)
         let code_with_try = "try { doSomething(); } catch (e) { handleError(e); }";
         assert!(TRY_REGEX.is_match(code_with_try));
+        assert!(TRY_REGEX.is_match("try{ noSpace(); }")); // No space before brace
 
+        // Branch 2: try: (Python try)
         let code_with_python_try = "try:\n    do_something()\nexcept Exception as e:\n    pass";
         assert!(TRY_REGEX.is_match(code_with_python_try));
+
+        // Branch 3: except: (Python bare except block)
+        assert!(TRY_REGEX.is_match("except:\n    pass"));
+        assert!(TRY_REGEX.is_match("    except:")); // Indented except
 
         let code_without_try = "function process() { return result; }";
         assert!(!TRY_REGEX.is_match(code_without_try));
@@ -514,9 +523,23 @@ mod tests {
 
     #[test]
     fn test_prisma_regex() {
+        // Test all branches: prisma\.|PrismaClient|findMany|findUnique|create\(
+
+        // Branch 1: prisma. (Prisma client method calls)
         let code_with_prisma = "const user = await prisma.user.findUnique({ where: { id } });";
         assert!(PRISMA_REGEX.is_match(code_with_prisma));
 
+        // Branch 2: PrismaClient (client instantiation)
+        assert!(PRISMA_REGEX.is_match("const prisma = new PrismaClient();"));
+        assert!(PRISMA_REGEX.is_match("import { PrismaClient } from '@prisma/client';"));
+
+        // Branch 3: findMany (query method)
+        assert!(PRISMA_REGEX.is_match("const users = await findMany({ where: { active: true } });"));
+
+        // Branch 4: findUnique (query method)
+        assert!(PRISMA_REGEX.is_match("const user = await findUnique({ where: { id } });"));
+
+        // Branch 5: create( (create method)
         let code_with_prisma_create = "const post = await prisma.post.create({ data: { title } });";
         assert!(PRISMA_REGEX.is_match(code_with_prisma_create));
 
@@ -526,14 +549,27 @@ mod tests {
 
     #[test]
     fn test_controller_regex() {
+        // Test all branches: Controller|router\.|app\.(get|post|put|delete)|HttpGet|HttpPost
+
+        // Branch 1: Controller (controller classes)
         let code_with_controller = "export class UserController { }";
         assert!(CONTROLLER_REGEX.is_match(code_with_controller));
 
+        // Branch 2: router. (router method calls)
         let code_with_router = "router.get('/users', (req, res) => { });";
         assert!(CONTROLLER_REGEX.is_match(code_with_router));
 
-        let code_with_app_get = "app.post('/api/users', handler);";
-        assert!(CONTROLLER_REGEX.is_match(code_with_app_get));
+        // Branch 3: app.(get|post|put|delete) (Express app methods)
+        assert!(CONTROLLER_REGEX.is_match("app.get('/api/users', handler);"));
+        assert!(CONTROLLER_REGEX.is_match("app.post('/api/users', handler);"));
+        assert!(CONTROLLER_REGEX.is_match("app.put('/api/users/:id', handler);"));
+        assert!(CONTROLLER_REGEX.is_match("app.delete('/api/users/:id', handler);"));
+
+        // Branch 4: HttpGet (HTTP decorators)
+        assert!(CONTROLLER_REGEX.is_match("@HttpGet('/users')"));
+
+        // Branch 5: HttpPost (HTTP decorators)
+        assert!(CONTROLLER_REGEX.is_match("@HttpPost('/users')"));
 
         let code_without_controller = "const helpers = { format: () => {} };";
         assert!(!CONTROLLER_REGEX.is_match(code_without_controller));
@@ -541,11 +577,23 @@ mod tests {
 
     #[test]
     fn test_api_regex() {
+        // Test all branches: fetch\(|axios\.|HttpClient|apiClient\.
+
+        // Branch 1: fetch( (Fetch API)
         let code_with_fetch = "const response = await fetch('/api/users');";
         assert!(API_REGEX.is_match(code_with_fetch));
 
+        // Branch 2: axios. (Axios library)
         let code_with_axios = "const data = await axios.get('/api/data');";
         assert!(API_REGEX.is_match(code_with_axios));
+
+        // Branch 3: HttpClient (HTTP client class)
+        assert!(API_REGEX.is_match("const client = new HttpClient();"));
+        assert!(API_REGEX.is_match("private readonly HttpClient httpClient;"));
+
+        // Branch 4: apiClient. (custom API client)
+        assert!(API_REGEX.is_match("const data = await apiClient.get('/users');"));
+        assert!(API_REGEX.is_match("apiClient.post('/api/create', body);"));
 
         let code_without_api = "const result = processData(input);";
         assert!(!API_REGEX.is_match(code_without_api));

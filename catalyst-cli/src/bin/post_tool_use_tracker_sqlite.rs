@@ -396,6 +396,37 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_session_id_security_edge_cases() {
+        // Unicode characters (should be rejected - only ASCII allowed)
+        assert!(validate_session_id("session™123").is_err());
+        assert!(validate_session_id("session_中文").is_err());
+        assert!(validate_session_id("session🎯test").is_err());
+        assert!(validate_session_id("café").is_err());
+
+        // Null bytes (should be rejected)
+        assert!(validate_session_id("session\0id").is_err());
+        assert!(validate_session_id("\0session").is_err());
+
+        // Control characters
+        assert!(validate_session_id("session\nid").is_err());
+        assert!(validate_session_id("session\rid").is_err());
+        assert!(validate_session_id("session\tid").is_err());
+
+        // Boundary length conditions
+        let length_254 = "a".repeat(254);
+        assert!(validate_session_id(&length_254).is_ok()); // Just under limit
+
+        let length_255 = "a".repeat(255);
+        assert!(validate_session_id(&length_255).is_ok()); // Exactly at limit
+
+        let length_256 = "a".repeat(256);
+        assert!(validate_session_id(&length_256).is_err()); // Just over limit
+
+        let length_1000 = "a".repeat(1000);
+        assert!(validate_session_id(&length_1000).is_err()); // Way over limit
+    }
+
+    #[test]
     fn test_category_as_str() {
         assert_eq!(Category::Backend.as_str(), "backend");
         assert_eq!(Category::Frontend.as_str(), "frontend");

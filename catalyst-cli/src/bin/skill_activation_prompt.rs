@@ -55,6 +55,12 @@ impl CompiledTriggers {
             .collect();
 
         // Pre-lowercase keywords once during compilation (eliminates N allocations per check)
+        // Note: Duplicate keywords (including case variations like "Backend" and "backend")
+        // are intentionally NOT deduplicated for these reasons:
+        // 1. Simplicity - avoids additional HashSet allocation and deduplication logic
+        // 2. Performance - keyword lists are typically small (<10 items), so duplicate checks
+        //    have negligible impact on matching performance (still O(n) substring checks)
+        // 3. Correctness - preserves user's original configuration without modification
         let keywords_lower = triggers
             .keywords
             .iter()
