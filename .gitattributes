@@ -1,0 +1,40 @@
+# Git line ending configuration for cross-platform compatibility
+# https://git-scm.com/docs/gitattributes
+
+# Default to LF for all text files
+* text=auto eol=lf
+
+# PowerShell scripts need CRLF for Windows compatibility
+*.ps1 text eol=crlf
+
+# Bash scripts use LF on all platforms
+*.sh text eol=lf
+
+# Rust source files
+*.rs text eol=lf
+*.toml text eol=lf
+Cargo.lock text eol=lf
+
+# Markdown and documentation
+*.md text eol=lf
+
+# JSON files
+*.json text eol=lf
+
+# YAML files
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Configuration files
+.gitignore text eol=lf
+.gitattributes text eol=lf
+.editorconfig text eol=lf
+
+# Binary files (explicitly marked)
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary

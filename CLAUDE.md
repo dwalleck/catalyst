@@ -127,6 +127,8 @@ See `dev/README.md` for full pattern documentation.
 ### Installation Options:
 
 **Recommended: Standalone Installation**
+
+Linux / macOS:
 ```bash
 # Build once, use everywhere
 ./install.sh
@@ -136,12 +138,23 @@ See `dev/README.md` for full pattern documentation.
 ./install.sh --sqlite
 ```
 
+Windows:
+```powershell
+# Build once, use everywhere
+.\install.ps1
+# Binaries installed to %USERPROFILE%\.claude-hooks\bin\
+
+# Or with SQLite support
+.\install.ps1 -Sqlite
+```
+
 **Benefits:**
 - ✅ Compile once (45s), use everywhere (0s per project)
 - ✅ Update in one place, all projects benefit
 - ✅ Tiny per-project footprint (50 bytes vs 2MB)
 - ✅ Consistent version across all projects
 - ✅ Idiomatic Cargo features (no multiple Cargo files)
+- ✅ Works on Linux, macOS, and Windows
 
 **See Complete Documentation:**
 - `docs/rust-hooks.md` - Full implementation guide
@@ -192,6 +205,8 @@ See `dev/README.md` for full pattern documentation.
    - If NO: Create new settings.json
 
 2. **Install Rust hooks:**
+
+   Linux / macOS:
    ```bash
    # From catalyst directory
    ./install.sh
@@ -200,7 +215,18 @@ See `dev/README.md` for full pattern documentation.
    ./install.sh --sqlite
    ```
 
+   Windows:
+   ```powershell
+   # From catalyst directory
+   .\install.ps1
+
+   # Or with SQLite support
+   .\install.ps1 -Sqlite
+   ```
+
 3. **Create hook wrappers in their project:**
+
+   Linux / macOS:
    ```bash
    cd your-project/.claude/hooks/
 
@@ -214,9 +240,17 @@ See `dev/README.md` for full pattern documentation.
    chmod +x *.sh
    ```
 
+   Windows:
+   ```powershell
+   cd your-project\.claude\hooks\
+
+   # Copy PowerShell wrappers from catalyst
+   Copy-Item catalyst\.claude\hooks\*.ps1 .
+   ```
+
 4. **Update settings.json** with hook configurations:
-   - UserPromptSubmit → skill-activation-prompt.sh
-   - PostToolUse → post-tool-use-tracker.sh
+   - UserPromptSubmit → skill-activation-prompt.sh/.ps1 (depending on OS)
+   - PostToolUse → post-tool-use-tracker.sh/.ps1 (depending on OS)
    - Preserve any existing config
 
 5. **DO NOT copy Stop hooks** unless user has monorepo and specifically requests them
@@ -250,7 +284,7 @@ See `dev/README.md` for full pattern documentation.
 | **skill-developer** | None | ✅ Copy as-is |
 | **route-tester** | JWT cookie auth | Adapt for their auth or skip |
 | **error-tracking** | Sentry | Adapt for their error tracking |
-| **All hooks** | Rust (or compile from source) | ✅ Install via RustHooks/install.sh |
+| **All hooks** | Rust (or compile from source) | ✅ Install via install.sh (Linux/macOS) or install.ps1 (Windows) |
 | **All agents** | None | ✅ Copy as-is |
 
 ---
@@ -424,7 +458,7 @@ The `.claude/settings.json` here is an EXAMPLE showing:
 ## When Users Ask "How Do I...?"
 
 **"How do I make skills auto-activate?"**
-→ Run ./install.sh from catalyst directory, create wrappers in your project, configure settings.json
+→ Run ./install.sh (Linux/macOS) or .\install.ps1 (Windows) from catalyst directory, create wrappers in your project, configure settings.json
 
 **"How do I create my own skill?"**
 → Load the skill-developer skill, it teaches skill creation for any tech stack
