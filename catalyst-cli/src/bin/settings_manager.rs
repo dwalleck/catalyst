@@ -32,6 +32,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::env;
 use std::io::{self, IsTerminal};
+use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(name = "settings-manager")]
@@ -154,6 +155,9 @@ fn main() -> Result<()> {
                 Err(_) => (ClaudeSettings::default(), false),
             };
 
+            // Parse event string into HookEvent enum
+            let hook_event = HookEvent::from_str(&event)?;
+
             let hook_config = HookConfig {
                 matcher: matcher.clone(),
                 hooks: vec![Hook {
@@ -162,7 +166,7 @@ fn main() -> Result<()> {
                 }],
             };
 
-            settings.add_hook(&event, hook_config)?;
+            settings.add_hook(hook_event, hook_config)?;
 
             if dry_run {
                 if use_color {
@@ -215,7 +219,11 @@ fn main() -> Result<()> {
             dry_run,
         } => {
             let mut settings = ClaudeSettings::read(&path)?;
-            settings.remove_hook(&event, &pattern);
+
+            // Parse event string into HookEvent enum
+            let hook_event = HookEvent::from_str(&event)?;
+
+            settings.remove_hook(hook_event, &pattern);
 
             if dry_run {
                 if use_color {

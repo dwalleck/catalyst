@@ -12,13 +12,13 @@
 //! let mut settings = ClaudeSettings::read(".claude/settings.json")?;
 //!
 //! // Add a hook
-//! settings.add_hook("UserPromptSubmit", HookConfig {
+//! settings.add_hook(HookEvent::UserPromptSubmit, HookConfig {
 //!     matcher: None,
 //!     hooks: vec![Hook {
 //!         r#type: "command".to_string(),
 //!         command: "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh".to_string(),
 //!     }],
-//! });
+//! })?;
 //!
 //! // Validate and write
 //! settings.validate()?;
@@ -30,9 +30,48 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::str::FromStr;
+
+/// Hook event types supported by Claude Code
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HookEvent {
+    /// Triggered when user submits a prompt
+    UserPromptSubmit,
+    /// Triggered after a tool is used
+    PostToolUse,
+    /// Triggered when the conversation stops
+    Stop,
+}
+
+impl fmt::Display for HookEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HookEvent::UserPromptSubmit => write!(f, "UserPromptSubmit"),
+            HookEvent::PostToolUse => write!(f, "PostToolUse"),
+            HookEvent::Stop => write!(f, "Stop"),
+        }
+    }
+}
+
+impl FromStr for HookEvent {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "UserPromptSubmit" => Ok(HookEvent::UserPromptSubmit),
+            "PostToolUse" => Ok(HookEvent::PostToolUse),
+            "Stop" => Ok(HookEvent::Stop),
+            _ => anyhow::bail!(
+                "Unknown event '{}'. Valid events: UserPromptSubmit, PostToolUse, Stop",
+                s
+            ),
+        }
+    }
+}
 
 /// Constants for Claude Code settings validation
 pub mod constants {
@@ -41,18 +80,6 @@ pub mod constants {
 
     /// All valid hook types
     pub const VALID_HOOK_TYPES: &[&str] = &[HOOK_TYPE_COMMAND];
-
-    /// Hook event: UserPromptSubmit
-    pub const EVENT_USER_PROMPT_SUBMIT: &str = "UserPromptSubmit";
-
-    /// Hook event: PostToolUse
-    pub const EVENT_POST_TOOL_USE: &str = "PostToolUse";
-
-    /// Hook event: Stop
-    pub const EVENT_STOP: &str = "Stop";
-
-    /// All valid hook events (from Claude Code documentation)
-    pub const VALID_EVENTS: &[&str] = &[EVENT_USER_PROMPT_SUBMIT, EVENT_POST_TOOL_USE, EVENT_STOP];
 }
 
 /// Root settings structure for Claude Code
@@ -73,7 +100,7 @@ pub struct ClaudeSettings {
 
     /// Hook configurations by event type
     #[serde(default)]
-    pub hooks: HashMap<String, Vec<HookConfig>>,
+    pub hooks: HashMap<HookEvent, Vec<HookConfig>>,
 }
 
 /// Permission settings for tool usage
@@ -181,28 +208,18 @@ impl ClaudeSettings {
 
     /// Add a hook configuration to a specific event
     ///
-    /// Validates the event name and hook configuration immediately.
+    /// Validates the hook configuration immediately.
     ///
     /// # Arguments
     ///
-    /// * `event` - Event name (e.g., "UserPromptSubmit", "PostToolUse", "Stop")
+    /// * `event` - Hook event type
     /// * `hook_config` - Hook configuration to add
     ///
     /// # Errors
     ///
-    /// Returns error if event name is invalid, hook type is unsupported,
-    /// or hook configuration is invalid
-    pub fn add_hook(&mut self, event: &str, hook_config: HookConfig) -> Result<()> {
+    /// Returns error if hook type is unsupported or hook configuration is invalid
+    pub fn add_hook(&mut self, event: HookEvent, hook_config: HookConfig) -> Result<()> {
         use constants::*;
-
-        // Validate event name
-        if !VALID_EVENTS.contains(&event) {
-            anyhow::bail!(
-                "Unknown event '{}'. Valid events: {}",
-                event,
-                VALID_EVENTS.join(", ")
-            );
-        }
 
         // Validate hooks array not empty
         if hook_config.hooks.is_empty() {
@@ -230,10 +247,7 @@ impl ClaudeSettings {
         }
 
         // All validations passed, add the hook
-        self.hooks
-            .entry(event.to_string())
-            .or_default()
-            .push(hook_config);
+        self.hooks.entry(event).or_default().push(hook_config);
 
         Ok(())
     }
@@ -242,10 +256,10 @@ impl ClaudeSettings {
     ///
     /// # Arguments
     ///
-    /// * `event` - Event name to remove hooks from
+    /// * `event` - Hook event type to remove hooks from
     /// * `command_pattern` - Pattern to match in hook commands
-    pub fn remove_hook(&mut self, event: &str, command_pattern: &str) {
-        if let Some(configs) = self.hooks.get_mut(event) {
+    pub fn remove_hook(&mut self, event: HookEvent, command_pattern: &str) {
+        if let Some(configs) = self.hooks.get_mut(&event) {
             configs.retain(|config| {
                 config
                     .hooks
@@ -306,7 +320,6 @@ impl ClaudeSettings {
     /// Validate the settings structure
     ///
     /// Checks:
-    /// - Hook event names are valid Claude Code events
     /// - Hook matcher patterns are valid regex
     /// - Hook arrays are not empty
     /// - Hook types are supported
@@ -319,15 +332,6 @@ impl ClaudeSettings {
 
         // Validate hooks
         for (event, configs) in &self.hooks {
-            // Validate event name
-            if !VALID_EVENTS.contains(&event.as_str()) {
-                anyhow::bail!(
-                    "Unknown event '{}'. Valid events: {}",
-                    event,
-                    VALID_EVENTS.join(", ")
-                );
-            }
-
             for config in configs {
                 // Validate matcher is valid regex if present
                 if let Some(ref matcher) = config.matcher {
@@ -405,37 +409,52 @@ mod tests {
     #[test]
     fn test_add_hook() {
         let mut settings = ClaudeSettings::default();
-        settings.add_hook(
-            "UserPromptSubmit",
-            HookConfig {
-                matcher: None,
-                hooks: vec![Hook {
-                    r#type: "command".to_string(),
-                    command: "test.sh".to_string(),
-                }],
-            },
-        );
+        settings
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: None,
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: "test.sh".to_string(),
+                    }],
+                },
+            )
+            .unwrap();
 
         assert_eq!(settings.hooks.len(), 1);
-        assert_eq!(settings.hooks.get("UserPromptSubmit").unwrap().len(), 1);
+        assert_eq!(
+            settings
+                .hooks
+                .get(&HookEvent::UserPromptSubmit)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn test_remove_hook() {
         let mut settings = ClaudeSettings::default();
-        settings.add_hook(
-            "UserPromptSubmit",
-            HookConfig {
-                matcher: None,
-                hooks: vec![Hook {
-                    r#type: "command".to_string(),
-                    command: "skill-activation-prompt.sh".to_string(),
-                }],
-            },
-        );
+        settings
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: None,
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: "skill-activation-prompt.sh".to_string(),
+                    }],
+                },
+            )
+            .unwrap();
 
-        settings.remove_hook("UserPromptSubmit", "skill-activation");
-        assert!(settings.hooks.get("UserPromptSubmit").unwrap().is_empty());
+        settings.remove_hook(HookEvent::UserPromptSubmit, "skill-activation");
+        assert!(settings
+            .hooks
+            .get(&HookEvent::UserPromptSubmit)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -458,17 +477,21 @@ mod tests {
 
     #[test]
     fn test_merge_permissions() {
-        let mut base = ClaudeSettings::default();
-        base.permissions = Some(Permissions {
-            allow: vec!["Edit:*".to_string()],
-            default_mode: "ask".to_string(),
-        });
+        let mut base = ClaudeSettings {
+            permissions: Some(Permissions {
+                allow: vec!["Edit:*".to_string()],
+                default_mode: "ask".to_string(),
+            }),
+            ..Default::default()
+        };
 
-        let mut other = ClaudeSettings::default();
-        other.permissions = Some(Permissions {
-            allow: vec!["Write:*".to_string()],
-            default_mode: "acceptEdits".to_string(),
-        });
+        let other = ClaudeSettings {
+            permissions: Some(Permissions {
+                allow: vec!["Write:*".to_string()],
+                default_mode: "acceptEdits".to_string(),
+            }),
+            ..Default::default()
+        };
 
         base.merge(other);
 
@@ -481,7 +504,7 @@ mod tests {
     fn test_merge_hooks() {
         let mut base = ClaudeSettings::default();
         base.add_hook(
-            "UserPromptSubmit",
+            HookEvent::UserPromptSubmit,
             HookConfig {
                 matcher: None,
                 hooks: vec![Hook {
@@ -489,38 +512,46 @@ mod tests {
                     command: "hook1.sh".to_string(),
                 }],
             },
-        );
+        )
+        .unwrap();
 
         let mut other = ClaudeSettings::default();
-        other.add_hook(
-            "UserPromptSubmit",
-            HookConfig {
-                matcher: None,
-                hooks: vec![Hook {
-                    r#type: "command".to_string(),
-                    command: "hook2.sh".to_string(),
-                }],
-            },
-        );
+        other
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: None,
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: "hook2.sh".to_string(),
+                    }],
+                },
+            )
+            .unwrap();
 
         base.merge(other);
 
-        assert_eq!(base.hooks.get("UserPromptSubmit").unwrap().len(), 2);
+        assert_eq!(
+            base.hooks.get(&HookEvent::UserPromptSubmit).unwrap().len(),
+            2
+        );
     }
 
     #[test]
     fn test_validation_success() {
         let mut settings = ClaudeSettings::default();
-        settings.add_hook(
-            "UserPromptSubmit",
-            HookConfig {
-                matcher: Some("Edit|Write".to_string()),
-                hooks: vec![Hook {
-                    r#type: "command".to_string(),
-                    command: "test.sh".to_string(),
-                }],
-            },
-        );
+        settings
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: Some("Edit|Write".to_string()),
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: "test.sh".to_string(),
+                    }],
+                },
+            )
+            .unwrap();
 
         assert!(settings.validate().is_ok());
     }
@@ -529,7 +560,7 @@ mod tests {
     fn test_validation_invalid_regex() {
         let mut settings = ClaudeSettings::default();
         let result = settings.add_hook(
-            "UserPromptSubmit",
+            HookEvent::UserPromptSubmit,
             HookConfig {
                 matcher: Some("[invalid regex".to_string()),
                 hooks: vec![Hook {
@@ -551,7 +582,7 @@ mod tests {
     fn test_validation_empty_hooks_array() {
         let mut settings = ClaudeSettings::default();
         let result = settings.add_hook(
-            "UserPromptSubmit",
+            HookEvent::UserPromptSubmit,
             HookConfig {
                 matcher: None,
                 hooks: vec![],
@@ -570,7 +601,7 @@ mod tests {
     fn test_validation_invalid_hook_type() {
         let mut settings = ClaudeSettings::default();
         let result = settings.add_hook(
-            "UserPromptSubmit",
+            HookEvent::UserPromptSubmit,
             HookConfig {
                 matcher: None,
                 hooks: vec![Hook {
@@ -590,19 +621,23 @@ mod tests {
 
     #[test]
     fn test_serialization_roundtrip() {
-        let mut settings = ClaudeSettings::default();
-        settings.enable_all_project_mcp_servers = true;
-        settings.enabled_mcpjson_servers.push("mysql".to_string());
-        settings.add_hook(
-            "UserPromptSubmit",
-            HookConfig {
-                matcher: None,
-                hooks: vec![Hook {
-                    r#type: "command".to_string(),
-                    command: "test.sh".to_string(),
-                }],
-            },
-        );
+        let mut settings = ClaudeSettings {
+            enable_all_project_mcp_servers: true,
+            enabled_mcpjson_servers: vec!["mysql".to_string()],
+            ..Default::default()
+        };
+        settings
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: None,
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: "test.sh".to_string(),
+                    }],
+                },
+            )
+            .unwrap();
 
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: ClaudeSettings = serde_json::from_str(&json).unwrap();
@@ -620,19 +655,23 @@ mod tests {
             let temp_dir = TempDir::new().unwrap();
             let settings_path = temp_dir.path().join("settings.json");
 
-            let mut settings = ClaudeSettings::default();
-            settings.enable_all_project_mcp_servers = true;
-            settings.enabled_mcpjson_servers.push("mysql".to_string());
-            settings.add_hook(
-                "UserPromptSubmit",
-                HookConfig {
-                    matcher: Some("Edit|Write".to_string()),
-                    hooks: vec![Hook {
-                        r#type: "command".to_string(),
-                        command: "test.sh".to_string(),
-                    }],
-                },
-            );
+            let mut settings = ClaudeSettings {
+                enable_all_project_mcp_servers: true,
+                enabled_mcpjson_servers: vec!["mysql".to_string()],
+                ..Default::default()
+            };
+            settings
+                .add_hook(
+                    HookEvent::UserPromptSubmit,
+                    HookConfig {
+                        matcher: Some("Edit|Write".to_string()),
+                        hooks: vec![Hook {
+                            r#type: "command".to_string(),
+                            command: "test.sh".to_string(),
+                        }],
+                    },
+                )
+                .unwrap();
 
             // Write settings
             settings.write(&settings_path).unwrap();
