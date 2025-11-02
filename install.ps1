@@ -62,7 +62,27 @@ if (-not (Test-Path "Cargo.toml")) {
 
 # Copy source code
 Write-Host "📦 Copying source code..."
-Copy-Item -Path . -Destination $srcDir -Recurse -Force -Exclude @("target", ".git", "node_modules")
+# Note: Copy-Item -Exclude has limitations with directory recursion
+# Using Get-ChildItem for more reliable exclusion
+$excludeDirs = @("target", ".git", "node_modules")
+Get-ChildItem -Path . -Recurse -Force | Where-Object {
+    $item = $_
+    $shouldExclude = $false
+    foreach ($exclude in $excludeDirs) {
+        if ($item.FullName -like "*\$exclude\*" -or $item.Name -eq $exclude) {
+            $shouldExclude = $true
+            break
+        }
+    }
+    -not $shouldExclude
+} | ForEach-Object {
+    $targetPath = $_.FullName.Replace($PWD.Path, $srcDir)
+    if ($_.PSIsContainer) {
+        New-Item -ItemType Directory -Path $targetPath -Force | Out-Null
+    } else {
+        Copy-Item $_.FullName -Destination $targetPath -Force
+    }
+}
 Set-Location $srcDir
 
 # Build release binaries
@@ -95,14 +115,20 @@ foreach ($binary in $coreBinaries) {
         $binaryName = Split-Path $binary -Leaf
         Copy-Item $binary "$binDir\$binaryName" -Force
         Write-Host "   ✅ Installed: $binaryName"
+    } else {
+        $binaryName = Split-Path $binary -Leaf
+        Write-Warning "Binary not found: $binaryName (expected at $binary)"
     }
 }
 
 # Copy SQLite binaries if built
 if ($Sqlite) {
-    if (Test-Path "target\release\post-tool-use-tracker-sqlite.exe") {
-        Copy-Item "target\release\post-tool-use-tracker-sqlite.exe" "$binDir\" -Force
+    $sqliteBinary = "target\release\post-tool-use-tracker-sqlite.exe"
+    if (Test-Path $sqliteBinary) {
+        Copy-Item $sqliteBinary "$binDir\" -Force
         Write-Host "   ✅ Installed: post-tool-use-tracker-sqlite.exe"
+    } else {
+        Write-Warning "SQLite binary not found: post-tool-use-tracker-sqlite.exe (expected at $sqliteBinary)"
     }
 }
 
