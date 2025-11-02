@@ -16,6 +16,10 @@ This document captures common Rust mistakes and their solutions discovered durin
 11. [File I/O Testing with tempfile](#file-io-testing-with-tempfile)
 12. [Using Constants for Validation](#using-constants-for-validation)
 13. [CLI User Feedback for File Operations](#cli-user-feedback-for-file-operations)
+14. [Using NamedTempFile for Automatic Cleanup](#using-namedtempfile-for-automatic-cleanup)
+15. [Immediate Validation in Setter Methods](#immediate-validation-in-setter-methods)
+16. [Avoiding Borrow Checker Issues with HashSet](#avoiding-borrow-checker-issues-with-hashset)
+17. [Fixing Time-of-Check-Time-of-Use (TOCTOU) Races](#fixing-time-of-check-time-of-use-toctou-races)
 
 ---
 
@@ -1634,6 +1638,502 @@ For CLI file operations:
 
 ---
 
+## Using NamedTempFile for Automatic Cleanup
+
+### Problem
+Manual temp file handling requires cleanup on all error paths. If any step fails between creating the temp file and the final rename, the temp file remains on disk as garbage.
+
+### Example - settings.rs Manual Approach (Phase 2.6)
+
+```rust
+// ❌ WORKS but leaves temp files on failure
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let temp_path = path.with_extension("tmp");
+    let mut temp_file = fs::File::create(&temp_path)?;
+
+    temp_file.write_all(json.as_bytes())?;
+    temp_file.sync_all()?;
+    drop(temp_file);
+
+    // If rename fails, temp_path is left on disk!
+    fs::rename(&temp_path, path)?;
+    Ok(())
+}
+```
+
+**Problem:** If `fs::rename()` fails, the `.tmp` file remains as garbage.
+
+### Solution - Use NamedTempFile
+
+```rust
+use tempfile::NamedTempFile;
+
+// ✅ BETTER - Automatic cleanup on any error
+pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let json = serde_json::to_string_pretty(self)?;
+
+    // Create parent directories
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Create temp file in same directory (for atomic rename)
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp_file = NamedTempFile::new_in(dir)?;
+
+    // Write and sync
+    temp_file.write_all(json.as_bytes())?;
+    temp_file.as_file().sync_all()?;
+
+    // Atomic persist (auto-cleanup on failure!)
+    temp_file.persist(path)?;
+
+    Ok(())
+}
+```
+
+### Benefits of NamedTempFile
+
+1. **Automatic cleanup:** If any error occurs before `persist()`, temp file is deleted
+2. **RAII pattern:** Leverages Rust's drop semantics for cleanup
+3. **Atomic rename:** `persist()` uses same atomic rename as manual approach
+4. **Unique names:** Generates unique temp filenames automatically
+5. **Same directory:** `new_in(dir)` ensures temp file in same filesystem for atomic rename
+
+### When to Use
+
+**Use NamedTempFile for:**
+- ✅ Configuration file writes
+- ✅ State file writes
+- ✅ Any atomic write-and-rename pattern
+- ✅ Cache file writes
+
+**Manual temp files might be OK for:**
+- ❌ Debugging/testing (when you want to inspect temp files)
+- ❌ Non-atomic operations (where you don't need rename)
+
+### Rule
+**Always use `tempfile::NamedTempFile` for atomic writes instead of manual temp file handling. It prevents temp file garbage and handles cleanup automatically.**
+
+### Dependencies
+
+```toml
+[dependencies]
+tempfile = "3.8"
+```
+
+Note: While `tempfile` is often a dev-dependency for tests, it's appropriate as a regular dependency for production code that needs atomic writes.
+
+---
+
+## Immediate Validation in Setter Methods
+
+### Problem
+Deferring validation to a separate `validate()` method allows invalid state to be created, leading to confusing errors far from where the problem originated.
+
+### Example - Deferred Validation (Phase 2.6 Original)
+
+```rust
+// ❌ BAD - Can create invalid state
+pub fn add_hook(&mut self, event: &str, hook_config: HookConfig) {
+    self.hooks
+        .entry(event.to_string())
+        .or_default()
+        .push(hook_config);
+    // Invalid data is now in the struct!
+}
+
+// Later, somewhere else...
+fn main() -> Result<()> {
+    let mut settings = ClaudeSettings::default();
+
+    // This succeeds even with invalid event name
+    settings.add_hook("InvalidEvent", HookConfig { ... });
+
+    // Error happens here, far from the source
+    settings.validate()?;  // Error: "Unknown event 'InvalidEvent'"
+
+    Ok(())
+}
+```
+
+**Problems:**
+1. Invalid state can exist in memory
+2. Error discovered far from where it was created
+3. Multiple invalid items can accumulate before validation
+4. Harder to debug - which add_hook() call was wrong?
+
+### Solution - Immediate Validation
+
+```rust
+// ✅ GOOD - Validate immediately
+pub fn add_hook(&mut self, event: &str, hook_config: HookConfig) -> Result<()> {
+    use constants::*;
+
+    // Validate event name
+    if !VALID_EVENTS.contains(&event) {
+        anyhow::bail!(
+            "Unknown event '{}'. Valid events: {}",
+            event,
+            VALID_EVENTS.join(", ")
+        );
+    }
+
+    // Validate hooks array not empty
+    if hook_config.hooks.is_empty() {
+        anyhow::bail!("Empty hooks array for {} event", event);
+    }
+
+    // Validate hook types
+    for hook in &hook_config.hooks {
+        if !VALID_HOOK_TYPES.contains(&hook.r#type.as_str()) {
+            anyhow::bail!(
+                "Unknown hook type '{}' in {} event. Valid types: {}",
+                hook.r#type, event, VALID_HOOK_TYPES.join(", ")
+            );
+        }
+    }
+
+    // Only add if all validations pass
+    self.hooks.entry(event.to_string()).or_default().push(hook_config);
+
+    Ok(())
+}
+```
+
+### Benefits
+
+1. **Fail fast:** Errors caught immediately at the source
+2. **Clear error location:** Stack trace points to exact add_hook() call
+3. **No invalid state:** Struct always remains valid
+4. **Better error messages:** Can include context about what was being added
+5. **Separate validate() becomes optional:** Only needed for loaded/deserialized data
+
+### When to Use
+
+**Immediate validation for:**
+- ✅ Builder/setter methods that modify state
+- ✅ Operations that can have invalid inputs
+- ✅ Data transformations that may fail
+
+**Deferred validation for:**
+- ❌ Batch operations where you want to collect all errors
+- ❌ Data loaded from external sources (validate after deserialization)
+- ❌ Performance-critical code where validation overhead is too high
+
+### Pattern: Keep Both Methods
+
+```rust
+impl ClaudeSettings {
+    // Immediate validation for programmatic use
+    pub fn add_hook(&mut self, event: &str, hook_config: HookConfig) -> Result<()> {
+        // ... validate immediately ...
+        Ok(())
+    }
+
+    // Separate validate() for loaded data
+    pub fn validate(&self) -> Result<()> {
+        // Validate entire struct (for data loaded from JSON)
+        for (event, configs) in &self.hooks {
+            // ... validate each hook ...
+        }
+        Ok(())
+    }
+}
+```
+
+**Usage:**
+```rust
+// Programmatic use - immediate validation
+settings.add_hook("UserPromptSubmit", hook_config)?;  // Fails immediately
+
+// Loaded data - batch validation
+let settings = ClaudeSettings::read("settings.json")?;
+settings.validate()?;  // Validate everything at once
+```
+
+### Rule
+**Validate inputs immediately in setter/builder methods. Return `Result<()>` to signal validation errors at the source. Keep a separate `validate()` method for validating deserialized/loaded data.**
+
+---
+
+## Avoiding Borrow Checker Issues with HashSet
+
+### Problem
+Creating a HashSet from borrowed data while simultaneously trying to mutate the original collection causes borrow checker errors.
+
+### Example - Borrow Checker Error (Phase 2.6 Initial Attempt)
+
+```rust
+// ❌ WRONG - Borrow checker error
+pub fn merge(&mut self, other: ClaudeSettings) {
+    // Immutable borrow here
+    let existing_servers: HashSet<_> = self.enabled_mcpjson_servers.iter().collect();
+
+    for server in other.enabled_mcpjson_servers {
+        if !existing_servers.contains(&server) {
+            // ERROR: Mutable borrow while immutable borrow exists
+            self.enabled_mcpjson_servers.push(server);
+        }
+    }
+}
+```
+
+**Compiler error:**
+```
+error[E0502]: cannot borrow `self.enabled_mcpjson_servers` as mutable
+because it is also borrowed as immutable
+```
+
+**Why it fails:**
+- `.iter()` creates references to items in `self.enabled_mcpjson_servers`
+- These references live in the `HashSet<&String>`
+- We then try to push (mut borrow) while HashSet still holds references (immut borrow)
+
+### Solution - Clone or Copy Elements
+
+```rust
+// ✅ CORRECT - Clone elements to break the borrow
+pub fn merge(&mut self, other: ClaudeSettings) {
+    // Clone elements, no references to self
+    let existing_servers: HashSet<_> =
+        self.enabled_mcpjson_servers.iter().cloned().collect();
+
+    for server in other.enabled_mcpjson_servers {
+        if !existing_servers.contains(&server) {
+            self.enabled_mcpjson_servers.push(server);  // Now OK!
+        }
+    }
+}
+```
+
+### Why .cloned() Works
+
+```rust
+// Without .cloned() - HashSet<&String> (references to self)
+let bad: HashSet<&String> = self.vec.iter().collect();
+
+// With .cloned() - HashSet<String> (owned copies, no borrows)
+let good: HashSet<String> = self.vec.iter().cloned().collect();
+```
+
+### Alternative Solutions
+
+**Option 1: Drain and rebuild (if you're replacing the whole vec)**
+```rust
+let existing: HashSet<_> = self.vec.drain(..).collect();
+// Now self.vec is empty, no borrow issues
+for item in other.vec {
+    if !existing.contains(&item) {
+        self.vec.push(item);
+    }
+}
+```
+
+**Option 2: Build new vec then swap**
+```rust
+let existing: HashSet<_> = self.vec.iter().cloned().collect();
+let mut new_vec = self.vec.clone();  // Or drain
+for item in other.vec {
+    if !existing.contains(&item) {
+        new_vec.push(item);
+    }
+}
+self.vec = new_vec;
+```
+
+**Option 3: Use Entry API (for HashMap)**
+```rust
+for (key, value) in other.map {
+    self.map.entry(key).or_insert(value);  // No borrow issues
+}
+```
+
+### Performance Considerations
+
+**Cost of .cloned():**
+- O(n) time to clone elements
+- O(n) space for owned copies
+
+**Still better than O(n²) contains():**
+```rust
+// ❌ O(n²) - contains() is O(n) in Vec
+for item in other.vec {
+    if !self.vec.contains(&item) {  // O(n) lookup
+        self.vec.push(item);
+    }
+}
+
+// ✅ O(n) - HashSet lookup is O(1)
+let existing: HashSet<_> = self.vec.iter().cloned().collect();  // O(n)
+for item in other.vec {  // O(n)
+    if !existing.contains(&item) {  // O(1) lookup
+        self.vec.push(item);
+    }
+}
+```
+
+### Rule
+**Use `.cloned()` or `.copied()` when creating a HashSet/HashMap from borrowed data if you need to mutate the original collection. This breaks the borrow relationship and satisfies the borrow checker.**
+
+---
+
+## Fixing Time-of-Check-Time-of-Use (TOCTOU) Races
+
+### Problem
+Checking if a file exists separately from using it creates a race condition where the file state can change between the check and use.
+
+### Example - TOCTOU Race (Phase 2.6 settings_manager.rs Original)
+
+```rust
+// ❌ BAD - Race condition
+Commands::AddHook { path, ... } => {
+    // Check if file exists
+    let file_exists = std::path::Path::new(&path).exists();
+
+    // Time passes... file could be created/deleted here!
+
+    // Try to read based on old check
+    let mut settings = ClaudeSettings::read(&path).unwrap_or_default();
+
+    // Later, use outdated file_exists
+    if file_exists {
+        println!("Modified existing file");
+    } else {
+        println!("Created new file");
+    }
+}
+```
+
+**Race scenarios:**
+1. **False negative:** File doesn't exist during check, gets created before read, we say "created" but actually modified
+2. **False positive:** File exists during check, gets deleted before read, we say "modified" but actually created
+
+**Real-world impact:** Usually minor (wrong message), but can be serious in security-sensitive code.
+
+### Solution - Check the Result, Not the Filesystem
+
+```rust
+// ✅ GOOD - No race condition
+Commands::AddHook { path, ... } => {
+    // Try to read and let the Result tell us if it existed
+    let (mut settings, file_existed) = match ClaudeSettings::read(&path) {
+        Ok(s) => (s, true),   // File existed and was readable
+        Err(_) => (ClaudeSettings::default(), false),  // File didn't exist
+    };
+
+    // ... add hook ...
+
+    // Use the result from the ACTUAL operation
+    if file_existed {
+        println!("Modified existing file");  // We actually read it
+    } else {
+        println!("Created new file");  // We actually created it
+    }
+}
+```
+
+### Why This is Better
+
+1. **Atomic check-and-use:** Read attempt is a single atomic operation
+2. **Truth from operation:** We know the file existed because we successfully read it
+3. **No race window:** No time between check and use for state to change
+4. **Handles all cases:** Covers not-exists, exists-but-unreadable, etc.
+
+### Pattern: Operation-Based Checks
+
+```rust
+// ❌ BAD - Separate check
+if file.exists() {
+    let content = fs::read_to_string(&file)?;
+}
+
+// ✅ GOOD - Check via operation result
+match fs::read_to_string(&file) {
+    Ok(content) => { /* file existed and was readable */ },
+    Err(e) if e.kind() == io::ErrorKind::NotFound => { /* didn't exist */ },
+    Err(e) => return Err(e.into()),  /* other error */
+}
+
+// ❌ BAD - Separate check
+if !file.exists() {
+    fs::write(&file, "default")?;
+}
+
+// ✅ GOOD - Use create_new
+fs::OpenOptions::new()
+    .write(true)
+    .create_new(true)  // Fails if file exists (atomic)
+    .open(&file)?;
+```
+
+### Common TOCTOU Patterns
+
+**File existence:**
+```rust
+// ❌ exists() then open()
+if path.exists() { fs::File::open(path)? }
+
+// ✅ Try open, handle NotFound
+match fs::File::open(path) {
+    Ok(f) => f,
+    Err(e) if e.kind() == io::ErrorKind::NotFound => { /* handle */ },
+}
+```
+
+**Directory creation:**
+```rust
+// ❌ exists() then create
+if !dir.exists() { fs::create_dir(dir)? }
+
+// ✅ create_dir_all (idempotent)
+fs::create_dir_all(dir)?;  // Succeeds if exists
+```
+
+**File metadata:**
+```rust
+// ❌ Check then use
+if path.metadata()?.is_file() {
+    fs::read(path)?
+}
+
+// ✅ Try operation, handle error
+match fs::read(path) {
+    Ok(data) => data,
+    Err(e) if e.kind() == io::ErrorKind::InvalidInput => { /* not a file */ },
+}
+```
+
+### Security Implications
+
+**Critical in security contexts:**
+```rust
+// 🔒 SECURITY ISSUE - TOCTOU vulnerability
+fn check_and_open_secure_file(path: &Path) -> Result<File> {
+    // Attacker could create symlink to /etc/passwd here!
+    if path.exists() && is_safe_path(path) {
+        // Between check and open, attacker swaps file
+        fs::File::open(path)?  // Opens attacker's file!
+    }
+}
+
+// ✅ SECURE - Open with specific flags
+fn open_secure_file(path: &Path) -> Result<File> {
+    fs::OpenOptions::new()
+        .read(true)
+        .create(false)    // Don't create
+        .truncate(false)  // Don't modify
+        .open(path)?      // Atomic open
+    // Then verify it's what we expect
+}
+```
+
+### Rule
+**Never check filesystem state separately from using it. Let the operation itself tell you the state through its Result. Use idempotent operations like `create_dir_all()` instead of conditional operations.**
+
+---
+
 ## Checklist Before Submitting PR
 
 Use this checklist to catch common issues before code review:
@@ -1675,6 +2175,6 @@ Use this checklist to catch common issues before code review:
 
 ---
 
-**Document Version:** 1.2 (Phase 2.6 PR #8 Review)
+**Document Version:** 1.3 (Phase 2.6 PR #8 Optional Improvements)
 **Last Updated:** 2025-11-01
 **Maintainer:** Catalyst Project Team

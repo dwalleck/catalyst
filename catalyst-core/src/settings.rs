@@ -29,7 +29,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -134,6 +134,7 @@ impl ClaudeSettings {
     ///
     /// Uses atomic write (temp file + rename) to prevent corruption if write fails.
     /// Creates parent directories if they don't exist.
+    /// Uses tempfile crate for automatic cleanup on failure.
     ///
     /// # Arguments
     ///
@@ -144,6 +145,8 @@ impl ClaudeSettings {
     /// Returns error if serialization fails, parent directory cannot be created,
     /// or file cannot be written
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        use tempfile::NamedTempFile;
+
         let path = path.as_ref();
         let json = serde_json::to_string_pretty(self).context("Failed to serialize settings")?;
 
@@ -152,42 +155,87 @@ impl ClaudeSettings {
             fs::create_dir_all(parent).context("Failed to create parent directories")?;
         }
 
-        // Atomic write using temp file + rename
-        let temp_path = path.with_extension("tmp");
-
-        // Write to temp file first
+        // Create temp file in same directory (important for atomic rename)
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
         let mut temp_file =
-            fs::File::create(&temp_path).context("Failed to create temporary file")?;
+            NamedTempFile::new_in(dir).context("Failed to create temporary file")?;
 
+        // Write to temp file
         temp_file
             .write_all(json.as_bytes())
             .context("Failed to write to temporary file")?;
 
         // Ensure data is flushed to disk
         temp_file
+            .as_file()
             .sync_all()
             .context("Failed to sync temporary file")?;
 
-        // Drop the file handle before rename
-        drop(temp_file);
-
-        // Atomic rename (POSIX guarantees atomicity)
-        fs::rename(&temp_path, path).context("Failed to rename temporary file")?;
+        // Atomic persist to final location (auto-cleanup on failure)
+        temp_file
+            .persist(path)
+            .context("Failed to persist temporary file")?;
 
         Ok(())
     }
 
     /// Add a hook configuration to a specific event
     ///
+    /// Validates the event name and hook configuration immediately.
+    ///
     /// # Arguments
     ///
     /// * `event` - Event name (e.g., "UserPromptSubmit", "PostToolUse", "Stop")
     /// * `hook_config` - Hook configuration to add
-    pub fn add_hook(&mut self, event: &str, hook_config: HookConfig) {
+    ///
+    /// # Errors
+    ///
+    /// Returns error if event name is invalid, hook type is unsupported,
+    /// or hook configuration is invalid
+    pub fn add_hook(&mut self, event: &str, hook_config: HookConfig) -> Result<()> {
+        use constants::*;
+
+        // Validate event name
+        if !VALID_EVENTS.contains(&event) {
+            anyhow::bail!(
+                "Unknown event '{}'. Valid events: {}",
+                event,
+                VALID_EVENTS.join(", ")
+            );
+        }
+
+        // Validate hooks array not empty
+        if hook_config.hooks.is_empty() {
+            anyhow::bail!("Empty hooks array for {} event", event);
+        }
+
+        // Validate hook types
+        for hook in &hook_config.hooks {
+            if !VALID_HOOK_TYPES.contains(&hook.r#type.as_str()) {
+                anyhow::bail!(
+                    "Unknown hook type '{}' in {} event. Valid types: {}",
+                    hook.r#type,
+                    event,
+                    VALID_HOOK_TYPES.join(", ")
+                );
+            }
+        }
+
+        // Validate matcher is valid regex if present
+        if let Some(ref matcher) = hook_config.matcher {
+            regex::Regex::new(matcher).context(format!(
+                "Invalid matcher regex in {} hook: {}",
+                event, matcher
+            ))?;
+        }
+
+        // All validations passed, add the hook
         self.hooks
             .entry(event.to_string())
             .or_default()
             .push(hook_config);
+
+        Ok(())
     }
 
     /// Remove hooks matching a command pattern
@@ -211,6 +259,7 @@ impl ClaudeSettings {
     ///
     /// This preserves existing settings and adds new ones from the other settings.
     /// For collections (MCP servers, permissions, hooks), items are appended without duplication.
+    /// Uses HashSet for O(n) deduplication instead of O(n²).
     ///
     /// # Arguments
     ///
@@ -221,9 +270,10 @@ impl ClaudeSettings {
             self.enable_all_project_mcp_servers = true;
         }
 
-        // Merge MCP servers (deduplicate)
+        // Merge MCP servers (deduplicate with HashSet for O(n) performance)
+        let existing_servers: HashSet<_> = self.enabled_mcpjson_servers.iter().cloned().collect();
         for server in other.enabled_mcpjson_servers {
-            if !self.enabled_mcpjson_servers.contains(&server) {
+            if !existing_servers.contains(&server) {
                 self.enabled_mcpjson_servers.push(server);
             }
         }
@@ -231,9 +281,10 @@ impl ClaudeSettings {
         // Merge permissions
         if let Some(other_perms) = other.permissions {
             if let Some(ref mut perms) = self.permissions {
-                // Merge allow patterns (deduplicate)
+                // Merge allow patterns (deduplicate with HashSet)
+                let existing_allow: HashSet<_> = perms.allow.iter().cloned().collect();
                 for allow in other_perms.allow {
-                    if !perms.allow.contains(&allow) {
+                    if !existing_allow.contains(&allow) {
                         perms.allow.push(allow);
                     }
                 }
@@ -477,7 +528,7 @@ mod tests {
     #[test]
     fn test_validation_invalid_regex() {
         let mut settings = ClaudeSettings::default();
-        settings.add_hook(
+        let result = settings.add_hook(
             "UserPromptSubmit",
             HookConfig {
                 matcher: Some("[invalid regex".to_string()),
@@ -488,13 +539,18 @@ mod tests {
             },
         );
 
-        assert!(settings.validate().is_err());
+        // add_hook() should return error for invalid regex
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid matcher regex"));
     }
 
     #[test]
     fn test_validation_empty_hooks_array() {
         let mut settings = ClaudeSettings::default();
-        settings.add_hook(
+        let result = settings.add_hook(
             "UserPromptSubmit",
             HookConfig {
                 matcher: None,
@@ -502,13 +558,18 @@ mod tests {
             },
         );
 
-        assert!(settings.validate().is_err());
+        // add_hook() should return error for empty hooks array
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Empty hooks array"));
     }
 
     #[test]
     fn test_validation_invalid_hook_type() {
         let mut settings = ClaudeSettings::default();
-        settings.add_hook(
+        let result = settings.add_hook(
             "UserPromptSubmit",
             HookConfig {
                 matcher: None,
@@ -519,7 +580,12 @@ mod tests {
             },
         );
 
-        assert!(settings.validate().is_err());
+        // add_hook() should return error for invalid hook type
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown hook type"));
     }
 
     #[test]

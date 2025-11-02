@@ -12,7 +12,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 regex = { workspace = true }
-
-[dev-dependencies]
-# Phase 2.6: Integration tests for file I/O
 tempfile = "3.8"

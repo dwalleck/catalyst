@@ -148,11 +148,11 @@ fn main() -> Result<()> {
             matcher,
             dry_run,
         } => {
-            // Check if file exists before loading
-            let file_exists = std::path::Path::new(&path).exists();
-
-            // Load existing settings or create new
-            let mut settings = ClaudeSettings::read(&path).unwrap_or_default();
+            // Load existing settings or create new (check Result to avoid TOCTOU race)
+            let (mut settings, file_existed) = match ClaudeSettings::read(&path) {
+                Ok(s) => (s, true),
+                Err(_) => (ClaudeSettings::default(), false),
+            };
 
             let hook_config = HookConfig {
                 matcher: matcher.clone(),
@@ -162,10 +162,7 @@ fn main() -> Result<()> {
                 }],
             };
 
-            settings.add_hook(&event, hook_config);
-
-            // Validate before writing
-            settings.validate()?;
+            settings.add_hook(&event, hook_config)?;
 
             if dry_run {
                 if use_color {
@@ -178,7 +175,7 @@ fn main() -> Result<()> {
                 settings.write(&path)?;
 
                 if use_color {
-                    if file_exists {
+                    if file_existed {
                         println!(
                             "{} {}",
                             "✅ Hook added to existing file:".green().bold(),
@@ -197,7 +194,7 @@ fn main() -> Result<()> {
                         println!("  {} {}", "Matcher:".cyan(), m);
                     }
                 } else {
-                    if file_exists {
+                    if file_existed {
                         println!("✅ Hook added to existing file: {}", path);
                     } else {
                         println!("✅ Created new settings file: {}", path);
