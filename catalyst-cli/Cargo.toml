@@ -64,3 +64,8 @@ path = "src/bin/file_analyzer.rs"
 name = "post-tool-use-tracker-sqlite"
 path = "src/bin/post_tool_use_tracker_sqlite.rs"
 required-features = ["sqlite"]
+
+# Phase 2.6: Settings management CLI tool
+[[bin]]
+name = "settings-manager"
+path = "src/bin/settings_manager.rs"
