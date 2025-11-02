@@ -2948,6 +2948,284 @@ The settings module must handle both forward slashes (Unix) and backslashes (Win
 
 ---
 
+#### 2.6c Optional Improvements (Future Work)
+
+**Status:** ❌ Not Started
+**Assignee:** TBD
+**Effort:** 3-4 hours
+
+**Issue:** Optional type safety and usability enhancements identified during Phase 2.6 PR review. These are not blockers but would improve the settings management system's robustness and developer experience.
+
+**Background:**
+
+These improvements were identified during PR review for Phase 2.6. All are optional enhancements that can be implemented when there's bandwidth, as the current implementation is production-ready.
+
+**Proposed Enhancements:**
+
+##### 1. Hook Type Enum
+
+**Current State:** `Hook.r#type` is a String accepting "command"
+
+**Proposed:** Make it a type-safe enum like HookEvent
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookType {
+    Command,
+    // Future: Script, Function, etc.
+}
+
+pub struct Hook {
+    pub r#type: HookType,
+    pub command: String,
+}
+```
+
+**Benefits:**
+- Compile-time type safety
+- Better error messages
+- Easier to extend in the future
+- Consistent with HookEvent pattern
+
+**Effort:** 1 hour
+
+---
+
+##### 2. Builder Pattern for Complex HookConfig Construction
+
+**Current State:** Direct struct construction
+
+**Proposed:** Add builder for complex configurations
+
+```rust
+impl HookConfig {
+    pub fn builder() -> HookConfigBuilder {
+        HookConfigBuilder::default()
+    }
+}
+
+pub struct HookConfigBuilder {
+    matcher: Option<String>,
+    hooks: Vec<Hook>,
+}
+
+impl HookConfigBuilder {
+    pub fn matcher(mut self, pattern: impl Into<String>) -> Self {
+        self.matcher = Some(pattern.into());
+        self
+    }
+
+    pub fn add_hook(mut self, hook: Hook) -> Self {
+        self.hooks.push(hook);
+        self
+    }
+
+    pub fn build(self) -> Result<HookConfig> {
+        if self.hooks.is_empty() {
+            anyhow::bail!("HookConfig must have at least one hook");
+        }
+        Ok(HookConfig {
+            matcher: self.matcher,
+            hooks: self.hooks,
+        })
+    }
+}
+
+// Usage:
+let config = HookConfig::builder()
+    .matcher("Edit|Write")
+    .add_hook(Hook { ... })
+    .build()?;
+```
+
+**Benefits:**
+- Fluent API for complex configurations
+- Built-in validation during construction
+- More discoverable API
+- Prevents invalid states
+
+**Effort:** 1.5 hours
+
+---
+
+##### 3. Validation Levels (Strict vs Lenient)
+
+**Current State:** Single `validate()` method, with opt-in `validate_hook_commands()`
+
+**Proposed:** Separate strict validation (for writes) from lenient validation (for reads)
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub enum ValidationLevel {
+    /// Lenient validation for reading legacy files
+    /// - Allows unknown hook types
+    /// - Allows invalid regex (logs warning)
+    /// - Doesn't check file existence
+    Lenient,
+
+    /// Strict validation for writing new files
+    /// - Rejects unknown hook types
+    /// - Validates regex patterns
+    /// - Checks hook command existence
+    Strict,
+}
+
+impl ClaudeSettings {
+    pub fn validate(&self, level: ValidationLevel) -> Result<()> {
+        match level {
+            ValidationLevel::Lenient => self.validate_lenient(),
+            ValidationLevel::Strict => self.validate_strict(),
+        }
+    }
+
+    fn validate_lenient(&self) -> Result<()> {
+        // Basic structural validation only
+        // Log warnings for issues but don't fail
+    }
+
+    fn validate_strict(&self) -> Result<()> {
+        // Full validation including file existence
+        // Fail on any issues
+    }
+}
+
+// Usage:
+let settings = ClaudeSettings::read(path)?;
+settings.validate(ValidationLevel::Lenient)?;  // Reading
+
+settings.validate(ValidationLevel::Strict)?;   // Before writing
+settings.write(path)?;
+```
+
+**Benefits:**
+- Backwards compatibility with legacy files
+- Graceful degradation for older configurations
+- Clear separation of concerns
+- Better error messages tailored to context
+
+**Effort:** 1.5 hours
+
+---
+
+##### 4. Hook Execution Ordering
+
+**Current State:** Hooks execute in arbitrary order (HashMap iteration order)
+
+**Proposed:** Add optional priority field for deterministic execution order
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+
+    /// Optional priority for execution order (lower = earlier)
+    /// If not specified, defaults to 100
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u32>,
+
+    pub hooks: Vec<Hook>,
+}
+
+impl ClaudeSettings {
+    /// Get hooks for an event, sorted by priority
+    pub fn get_hooks_sorted(&self, event: &HookEvent) -> Vec<&HookConfig> {
+        let mut configs = self.hooks
+            .get(event)
+            .map(|v| v.iter().collect())
+            .unwrap_or_default();
+
+        configs.sort_by_key(|c| c.priority.unwrap_or(100));
+        configs
+    }
+}
+```
+
+**Example Configuration:**
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "priority": 10,
+        "hooks": [{"type": "command", "command": "pre-validation.sh"}]
+      },
+      {
+        "priority": 50,
+        "hooks": [{"type": "command", "command": "main-hook.sh"}]
+      },
+      {
+        "priority": 90,
+        "hooks": [{"type": "command", "command": "post-processing.sh"}]
+      }
+    ]
+  }
+}
+```
+
+**Benefits:**
+- Deterministic execution order
+- Allows pre/post processing patterns
+- Backwards compatible (priority is optional)
+- Useful for complex hook chains
+
+**Considerations:**
+- Most users won't need this
+- Adds complexity to mental model
+- Only implement if users request it
+
+**Effort:** 1 hour
+
+---
+
+**Tasks:**
+
+- [ ] Design and implement HookType enum
+  - [ ] Create enum with Command variant
+  - [ ] Update Hook struct to use enum
+  - [ ] Update FromStr implementation
+  - [ ] Add migration guide for users
+  - [ ] Update tests
+  - [ ] Update documentation
+
+- [ ] Implement builder pattern for HookConfig
+  - [ ] Create HookConfigBuilder struct
+  - [ ] Implement fluent API methods
+  - [ ] Add validation in build() method
+  - [ ] Add tests for builder
+  - [ ] Update examples in docs
+
+- [ ] Add validation levels
+  - [ ] Create ValidationLevel enum
+  - [ ] Implement validate_lenient() method
+  - [ ] Implement validate_strict() method
+  - [ ] Update validate() to accept level parameter
+  - [ ] Add logging for warnings in lenient mode
+  - [ ] Update all callers to specify level
+  - [ ] Add tests for both levels
+
+- [ ] Add hook execution ordering
+  - [ ] Add priority field to HookConfig
+  - [ ] Implement get_hooks_sorted() method
+  - [ ] Update documentation with examples
+  - [ ] Add tests for priority ordering
+  - [ ] Update CLI to support priority flag
+
+**Priority:** LOW - These are quality-of-life improvements, not critical features
+
+**Dependencies:**
+- Phase 2.6 must be complete
+
+**Notes:**
+
+These enhancements can be implemented independently in any order. Consider user feedback before implementing - if no one requests hook ordering, it may not be worth the added complexity.
+
+The HookType enum (#1) provides the most value for the least effort and should be prioritized if only doing one improvement.
+
+---
+
 ### 2.7 Windows-Specific Components
 
 **Status:** ❌ Not Started
