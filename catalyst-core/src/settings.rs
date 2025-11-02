@@ -36,6 +36,21 @@ use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
 
+/// Find the closest match from a list of valid options using Levenshtein distance
+///
+/// Returns Some(closest_match) if a suggestion is found within reasonable distance,
+/// None otherwise. Uses a threshold of 3 edits to avoid suggesting unrelated strings.
+fn find_closest_match<'a>(input: &str, valid_options: &[&'a str]) -> Option<&'a str> {
+    let threshold = 3; // Maximum edit distance for suggestions
+
+    valid_options
+        .iter()
+        .map(|&option| (option, strsim::levenshtein(input, option)))
+        .filter(|(_, distance)| *distance <= threshold)
+        .min_by_key(|(_, distance)| *distance)
+        .map(|(option, _)| option)
+}
+
 /// Hook event types supported by Claude Code
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookEvent {
@@ -65,10 +80,26 @@ impl FromStr for HookEvent {
             "UserPromptSubmit" => Ok(HookEvent::UserPromptSubmit),
             "PostToolUse" => Ok(HookEvent::PostToolUse),
             "Stop" => Ok(HookEvent::Stop),
-            _ => anyhow::bail!(
-                "Unknown event '{}'. Valid events: UserPromptSubmit, PostToolUse, Stop",
-                s
-            ),
+            _ => {
+                // Find closest match for suggestion
+                let valid_events = ["UserPromptSubmit", "PostToolUse", "Stop"];
+                let suggestion = find_closest_match(s, &valid_events);
+
+                if let Some(closest) = suggestion {
+                    anyhow::bail!(
+                        "Unknown event '{}'. Did you mean '{}'? Valid events: {}",
+                        s,
+                        closest,
+                        valid_events.join(", ")
+                    );
+                } else {
+                    anyhow::bail!(
+                        "Unknown event '{}'. Valid events: {}",
+                        s,
+                        valid_events.join(", ")
+                    );
+                }
+            }
         }
     }
 }
@@ -80,6 +111,22 @@ pub mod constants {
 
     /// All valid hook types
     pub const VALID_HOOK_TYPES: &[&str] = &[HOOK_TYPE_COMMAND];
+
+    /// Permission mode: ask (prompt user for each tool use)
+    pub const PERMISSION_MODE_ASK: &str = "ask";
+
+    /// Permission mode: acceptEdits (auto-accept edit operations)
+    pub const PERMISSION_MODE_ACCEPT_EDITS: &str = "acceptEdits";
+
+    /// Permission mode: deny (deny all tool uses not in allow list)
+    pub const PERMISSION_MODE_DENY: &str = "deny";
+
+    /// All valid permission modes
+    pub const VALID_PERMISSION_MODES: &[&str] = &[
+        PERMISSION_MODE_ASK,
+        PERMISSION_MODE_ACCEPT_EDITS,
+        PERMISSION_MODE_DENY,
+    ];
 }
 
 /// Root settings structure for Claude Code
@@ -272,8 +319,17 @@ impl ClaudeSettings {
     /// Merge another settings object into this one
     ///
     /// This preserves existing settings and adds new ones from the other settings.
-    /// For collections (MCP servers, permissions, hooks), items are appended without duplication.
-    /// Uses HashSet for O(n) deduplication instead of O(n²).
+    ///
+    /// **Deduplication behavior:**
+    /// - **MCP servers**: Deduplicated using HashSet (O(n) performance)
+    /// - **Permissions.allow**: Deduplicated using HashSet
+    /// - **Hooks**: NOT deduplicated - all hooks from both settings are kept
+    ///
+    /// **Rationale for hook behavior:**
+    /// Multiple identical hooks may be intentional (e.g., running the same hook
+    /// with different matchers, or allowing configuration layering). Deduplication
+    /// would require comparing entire HookConfig structures, which is expensive and
+    /// may incorrectly merge hooks that should be separate.
     ///
     /// # Arguments
     ///
@@ -320,6 +376,7 @@ impl ClaudeSettings {
     /// Validate the settings structure
     ///
     /// Checks:
+    /// - Permissions default_mode is a valid value
     /// - Hook matcher patterns are valid regex
     /// - Hook arrays are not empty
     /// - Hook types are supported
@@ -329,6 +386,33 @@ impl ClaudeSettings {
     /// Returns error if validation fails, with helpful messages showing valid options
     pub fn validate(&self) -> Result<()> {
         use constants::*;
+
+        // Validate permissions
+        if let Some(ref permissions) = self.permissions {
+            // Validate default_mode is non-empty and a valid value
+            if !permissions.default_mode.is_empty()
+                && !VALID_PERMISSION_MODES.contains(&permissions.default_mode.as_str())
+            {
+                // Try to suggest a close match
+                let suggestion =
+                    find_closest_match(&permissions.default_mode, VALID_PERMISSION_MODES);
+
+                if let Some(closest) = suggestion {
+                    anyhow::bail!(
+                        "Invalid permissions.defaultMode '{}'. Did you mean '{}'? Valid modes: {}",
+                        permissions.default_mode,
+                        closest,
+                        VALID_PERMISSION_MODES.join(", ")
+                    );
+                } else {
+                    anyhow::bail!(
+                        "Invalid permissions.defaultMode '{}'. Valid modes: {}",
+                        permissions.default_mode,
+                        VALID_PERMISSION_MODES.join(", ")
+                    );
+                }
+            }
+        }
 
         // Validate hooks
         for (event, configs) in &self.hooks {
@@ -355,6 +439,85 @@ impl ClaudeSettings {
                             event,
                             VALID_HOOK_TYPES.join(", ")
                         );
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate hook command paths (opt-in validation)
+    ///
+    /// Performs stricter validation of hook commands:
+    /// - Allows placeholders like $CLAUDE_PROJECT_DIR
+    /// - For absolute paths, checks if file exists and is executable
+    ///
+    /// This is separate from validate() to avoid breaking legitimate use cases
+    /// where commands may not exist at validation time (e.g., different environments).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if command path doesn't exist or isn't executable
+    pub fn validate_hook_commands(&self) -> Result<()> {
+        for (event, configs) in &self.hooks {
+            for config in configs {
+                for hook in &config.hooks {
+                    let command = &hook.command;
+
+                    // Skip validation for placeholder variables
+                    if command.contains("$CLAUDE_PROJECT_DIR")
+                        || command.contains("${CLAUDE_PROJECT_DIR}")
+                        || command.starts_with('$')
+                    {
+                        continue;
+                    }
+
+                    // For absolute paths, check if file exists and is executable
+                    if command.starts_with('/') || command.starts_with("~/") {
+                        let path = if command.starts_with("~/") {
+                            // Expand ~ to home directory
+                            if let Some(home) = std::env::var_os("HOME") {
+                                std::path::PathBuf::from(home)
+                                    .join(command.strip_prefix("~/").unwrap())
+                            } else {
+                                anyhow::bail!(
+                                    "Cannot validate hook command '{}' in {} event: HOME not set",
+                                    command,
+                                    event
+                                );
+                            }
+                        } else {
+                            std::path::PathBuf::from(command.split_whitespace().next().unwrap())
+                        };
+
+                        if !path.exists() {
+                            anyhow::bail!(
+                                "Hook command '{}' in {} event does not exist at path: {}",
+                                command,
+                                event,
+                                path.display()
+                            );
+                        }
+
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let metadata = path.metadata().context(format!(
+                                "Failed to check permissions for hook command: {}",
+                                path.display()
+                            ))?;
+                            let permissions = metadata.permissions();
+
+                            if permissions.mode() & 0o111 == 0 {
+                                anyhow::bail!(
+                                    "Hook command '{}' in {} event is not executable: {}",
+                                    command,
+                                    event,
+                                    path.display()
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -617,6 +780,216 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Unknown hook type"));
+    }
+
+    #[test]
+    fn test_validation_invalid_permission_mode() {
+        let settings = ClaudeSettings {
+            permissions: Some(Permissions {
+                allow: vec!["Edit:*".to_string()],
+                default_mode: "invalid_mode".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        // validate() should return error for invalid default_mode
+        let result = settings.validate();
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Invalid permissions.defaultMode"));
+        assert!(error_msg.contains("invalid_mode"));
+        assert!(error_msg.contains("ask"));
+    }
+
+    #[test]
+    fn test_validation_valid_permission_modes() {
+        use constants::*;
+
+        // Test all valid permission modes
+        for mode in VALID_PERMISSION_MODES {
+            let settings = ClaudeSettings {
+                permissions: Some(Permissions {
+                    allow: vec!["Edit:*".to_string()],
+                    default_mode: mode.to_string(),
+                }),
+                ..Default::default()
+            };
+
+            assert!(
+                settings.validate().is_ok(),
+                "Mode '{}' should be valid",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn test_validation_empty_permission_mode() {
+        // Empty default_mode should be allowed (treated as unset)
+        let settings = ClaudeSettings {
+            permissions: Some(Permissions {
+                allow: vec!["Edit:*".to_string()],
+                default_mode: String::new(),
+            }),
+            ..Default::default()
+        };
+
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn test_suggestion_hook_event_typo() {
+        // Test "did you mean" suggestion for HookEvent
+        let result = HookEvent::from_str("UserPromtSubmit"); // Missing 'p' in Prompt
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Did you mean"));
+        assert!(error_msg.contains("UserPromptSubmit"));
+    }
+
+    #[test]
+    fn test_suggestion_permission_mode_typo() {
+        let settings = ClaudeSettings {
+            permissions: Some(Permissions {
+                allow: vec!["Edit:*".to_string()],
+                default_mode: "aceptEdits".to_string(), // Missing 'c' in accept
+            }),
+            ..Default::default()
+        };
+
+        let result = settings.validate();
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Did you mean"));
+        assert!(error_msg.contains("acceptEdits"));
+    }
+
+    #[test]
+    fn test_suggestion_completely_wrong() {
+        // Test that completely wrong input doesn't get suggestions
+        let result = HookEvent::from_str("CompletelyWrong");
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        // Should not contain "Did you mean" since distance is too far
+        assert!(!error_msg.contains("Did you mean"));
+        assert!(error_msg.contains("Valid events"));
+    }
+
+    #[test]
+    fn test_hook_command_validation_placeholder() {
+        // Placeholder commands should pass validation
+        let mut settings = ClaudeSettings::default();
+        settings
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: None,
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: "$CLAUDE_PROJECT_DIR/.claude/hooks/test.sh".to_string(),
+                    }],
+                },
+            )
+            .unwrap();
+
+        assert!(settings.validate_hook_commands().is_ok());
+    }
+
+    #[test]
+    fn test_hook_command_validation_nonexistent() {
+        // Nonexistent absolute path should fail validation
+        let mut settings = ClaudeSettings::default();
+        settings
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: None,
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: "/nonexistent/path/to/script.sh".to_string(),
+                    }],
+                },
+            )
+            .unwrap();
+
+        let result = settings.validate_hook_commands();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_hook_command_validation_executable() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let script_path = temp_dir.path().join("test.sh");
+
+        // Create executable script
+        fs::write(&script_path, "#!/bin/bash\necho test").unwrap();
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).unwrap();
+
+        let mut settings = ClaudeSettings::default();
+        settings
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: None,
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: script_path.to_str().unwrap().to_string(),
+                    }],
+                },
+            )
+            .unwrap();
+
+        // Should pass validation - file exists and is executable
+        assert!(settings.validate_hook_commands().is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_hook_command_validation_not_executable() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let script_path = temp_dir.path().join("test.sh");
+
+        // Create non-executable file
+        fs::write(&script_path, "#!/bin/bash\necho test").unwrap();
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o644); // Not executable
+        fs::set_permissions(&script_path, perms).unwrap();
+
+        let mut settings = ClaudeSettings::default();
+        settings
+            .add_hook(
+                HookEvent::UserPromptSubmit,
+                HookConfig {
+                    matcher: None,
+                    hooks: vec![Hook {
+                        r#type: "command".to_string(),
+                        command: script_path.to_str().unwrap().to_string(),
+                    }],
+                },
+            )
+            .unwrap();
+
+        // Should fail validation - file exists but is not executable
+        let result = settings.validate_hook_commands();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is not executable"));
     }
 
     #[test]
