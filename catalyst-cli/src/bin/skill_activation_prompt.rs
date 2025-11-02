@@ -41,7 +41,17 @@ impl CompiledTriggers {
         let intent_regexes = triggers
             .intent_patterns
             .iter()
-            .filter_map(|pattern| Regex::new(pattern).ok())
+            .filter_map(|pattern| match Regex::new(pattern) {
+                Ok(regex) => Some(regex),
+                Err(e) => {
+                    tracing::warn!(
+                        pattern = %pattern,
+                        error = %e,
+                        "Failed to compile intent pattern regex, skipping"
+                    );
+                    None
+                }
+            })
             .collect();
 
         // Pre-lowercase keywords once during compilation (eliminates N allocations per check)
@@ -358,6 +368,35 @@ mod tests {
 
         // Should only have 2 valid regexes (invalid one skipped)
         assert_eq!(compiled.intent_regexes.len(), 2);
+    }
+
+    #[test]
+    fn test_duplicate_keywords_case_insensitive() {
+        let triggers = PromptTriggers {
+            keywords: vec![
+                "backend".to_string(),
+                "Backend".to_string(),
+                "BACKEND".to_string(),
+                "api".to_string(),
+            ],
+            intent_patterns: vec![],
+        };
+
+        let compiled = CompiledTriggers::from_triggers(&triggers);
+
+        // All keywords are lowercased, so duplicates remain (no deduplication)
+        assert_eq!(compiled.keywords_lower.len(), 4);
+        assert_eq!(compiled.keywords_lower[0], "backend");
+        assert_eq!(compiled.keywords_lower[1], "backend");
+        assert_eq!(compiled.keywords_lower[2], "backend");
+        assert_eq!(compiled.keywords_lower[3], "api");
+
+        // Matching still works correctly with duplicates
+        let prompt = "create a BACKEND service";
+        assert!(compiled
+            .keywords_lower
+            .iter()
+            .any(|kw| prompt.to_lowercase().contains(kw)));
     }
 
     #[test]

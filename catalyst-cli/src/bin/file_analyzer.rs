@@ -480,6 +480,27 @@ mod tests {
     }
 
     #[test]
+    fn test_async_regex_edge_cases() {
+        // Test with varied whitespace
+        assert!(ASYNC_REGEX.is_match("async  function test() {}"));
+        assert!(ASYNC_REGEX.is_match("async\tfunction test() {}"));
+        assert!(ASYNC_REGEX.is_match("async\nfunction test() {}"));
+
+        // Test in comments (should still match - this is expected behavior)
+        assert!(ASYNC_REGEX.is_match("// async function in comment"));
+
+        // Test partial matches - asyncFunction without space doesn't match
+        assert!(!ASYNC_REGEX.is_match("asyncFunction() {}"));
+        // Note: "myasync function" WILL match because "async " appears in it
+        // This is acceptable behavior - we're looking for the async keyword pattern
+
+        // Test TypeScript async patterns
+        assert!(ASYNC_REGEX.is_match("async def process():"));
+        assert!(ASYNC_REGEX.is_match("async fn handler() ->"));
+        assert!(ASYNC_REGEX.is_match("Task<string> result"));
+    }
+
+    #[test]
     fn test_try_regex() {
         let code_with_try = "try { doSomething(); } catch (e) { handleError(e); }";
         assert!(TRY_REGEX.is_match(code_with_try));
@@ -551,5 +572,53 @@ mod tests {
         assert_eq!(stats.async_files, 0);
         assert_eq!(stats.try_catch_files, 0);
         assert_eq!(stats.failed_files, 0);
+    }
+
+    #[test]
+    fn test_get_file_category_windows_paths() {
+        // Note: On Windows, Rust PathBuf automatically handles both / and \ as separators
+        // On Unix, only / is treated as a separator, so we use forward slashes for cross-platform tests
+
+        // Windows paths with forward slashes (works on all platforms)
+        assert_eq!(
+            get_file_category(&PathBuf::from("C:/project/frontend/App.tsx")),
+            "frontend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("C:/project/controllers/UserController.ts")),
+            "backend"
+        );
+        assert_eq!(
+            get_file_category(&PathBuf::from("C:/project/database/schema.sql")),
+            "database"
+        );
+
+        // UNC paths (Windows network paths)
+        assert_eq!(
+            get_file_category(&PathBuf::from("//storage/share/frontend/App.tsx")),
+            "frontend"
+        );
+    }
+
+    #[test]
+    fn test_should_analyze_windows_paths() {
+        // Note: Using forward slashes for cross-platform compatibility
+        // On Windows, Rust automatically normalizes these
+
+        // Windows paths with drive letters
+        assert!(should_analyze(&PathBuf::from("C:/project/app.ts")));
+        assert!(should_analyze(&PathBuf::from("C:/Users/dev/Component.tsx")));
+
+        // Skip test files on Windows paths
+        assert!(!should_analyze(&PathBuf::from("C:/project/app.test.ts")));
+        assert!(!should_analyze(&PathBuf::from(
+            "D:/code/Component.spec.tsx"
+        )));
+
+        // UNC paths (Windows network paths)
+        assert!(should_analyze(&PathBuf::from("//storage/share/app.ts")));
+        assert!(!should_analyze(&PathBuf::from(
+            "//storage/share/app.test.ts"
+        )));
     }
 }

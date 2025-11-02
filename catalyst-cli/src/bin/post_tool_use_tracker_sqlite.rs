@@ -545,6 +545,77 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_file_path_different_tools() {
+        let mut args = HashMap::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::Value::String("/project/test.ts".to_string()),
+        );
+
+        // Test all supported tool types
+        assert_eq!(
+            extract_file_path("Edit", &args),
+            Some("/project/test.ts".to_string())
+        );
+        assert_eq!(
+            extract_file_path("Write", &args),
+            Some("/project/test.ts".to_string())
+        );
+        assert_eq!(
+            extract_file_path("MultiEdit", &args),
+            Some("/project/test.ts".to_string())
+        );
+        assert_eq!(
+            extract_file_path("NotebookEdit", &args),
+            Some("/project/test.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_file_category_windows_paths() {
+        // Note: On Windows, Rust PathBuf automatically handles both / and \ as separators
+        // On Unix, only / is treated as a separator, so we use forward slashes for cross-platform tests
+
+        // Windows paths with forward slashes (works on all platforms)
+        assert!(matches!(
+            get_file_category("C:/project/frontend/App.tsx"),
+            Category::Frontend
+        ));
+        assert!(matches!(
+            get_file_category("C:/project/controllers/UserController.ts"),
+            Category::Backend
+        ));
+        assert!(matches!(
+            get_file_category("C:/project/database/schema.sql"),
+            Category::Database
+        ));
+
+        // UNC paths (Windows network paths)
+        assert!(matches!(
+            get_file_category("//storage/share/frontend/App.tsx"),
+            Category::Frontend
+        ));
+    }
+
+    #[test]
+    fn test_should_analyze_windows_paths() {
+        // Note: Using forward slashes for cross-platform compatibility
+        // On Windows, Rust automatically normalizes these
+
+        // Windows paths with drive letters
+        assert!(should_analyze("C:/project/app.ts"));
+        assert!(should_analyze("C:/Users/dev/Component.tsx"));
+
+        // Skip test files on Windows paths
+        assert!(!should_analyze("C:/project/app.test.ts"));
+        assert!(!should_analyze("D:/code/Component.spec.tsx"));
+
+        // UNC paths (Windows network paths)
+        assert!(should_analyze("//storage/share/app.ts"));
+        assert!(!should_analyze("//storage/share/app.test.ts"));
+    }
+
+    #[test]
     fn test_hook_input_deserialization() {
         let json = r#"{
             "session_id": "test-123",
