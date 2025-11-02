@@ -8,6 +8,7 @@
 
 Instead of embedding Rust source in each project, install a single binary globally:
 
+### Linux / macOS
 ```
 ~/.claude-hooks/                    # Global installation
 ├── bin/
@@ -22,6 +23,23 @@ Instead of embedding Rust source in each project, install a single binary global
 
 ~/project-2/.claude/hooks/
 └── skill-activation-prompt.sh     # Same wrapper, reuses binary
+```
+
+### Windows
+```
+%USERPROFILE%\.claude-hooks\        # Global installation
+├── bin\
+│   ├── skill-activation-prompt.exe     # Pre-compiled binary
+│   ├── file-analyzer.exe              # Pre-compiled binary
+│   └── post-tool-tracker-sqlite.exe   # Pre-compiled binary
+└── config\
+    └── default-config.json            # Default configuration
+
+C:\Users\You\project-1\.claude\hooks\
+└── skill-activation-prompt.ps1    # Thin wrapper calling global binary
+
+C:\Users\You\project-2\.claude\hooks\
+└── skill-activation-prompt.ps1    # Same wrapper, reuses binary
 ```
 
 ---
@@ -68,29 +86,41 @@ cp target/release/* ~/.claude-hooks/bin/
 
 ### Step 1: Build Hooks Globally
 
+#### Linux / macOS
 ```bash
-# Create global hooks directory
-mkdir -p ~/.claude-hooks/{bin,config,src}
+# Use the automated install script
+cd catalyst
+./install.sh
 
-# Clone or copy Rust hooks source
-cd ~/.claude-hooks/src
-# Copy RustHooks/ contents here
+# Or with SQLite support
+./install.sh --sqlite
 
-# Build release binaries
-cargo build --release
+# This will:
+# - Create ~/.claude-hooks/{bin,src}
+# - Build release binaries
+# - Copy binaries to ~/.claude-hooks/bin/
+```
 
-# Install binaries
-cp target/release/skill-activation-prompt ~/.claude-hooks/bin/
-cp target/release/file-analyzer ~/.claude-hooks/bin/
+#### Windows
+```powershell
+# Use the automated install script
+cd catalyst
+.\install.ps1
 
-# Make executable
-chmod +x ~/.claude-hooks/bin/*
+# Or with SQLite support
+.\install.ps1 -Sqlite
+
+# This will:
+# - Create %USERPROFILE%\.claude-hooks\{bin,src}
+# - Build release binaries
+# - Copy binaries to %USERPROFILE%\.claude-hooks\bin\
 ```
 
 ### Step 2: Create Per-Project Wrappers
 
 For each project:
 
+#### Linux / macOS
 ```bash
 cd ~/my-project/.claude/hooks
 
@@ -106,8 +136,23 @@ EOF
 chmod +x skill-activation-prompt.sh
 ```
 
+#### Windows
+```powershell
+cd C:\Users\You\my-project\.claude\hooks
+
+# Copy PowerShell wrappers from catalyst
+Copy-Item C:\path\to\catalyst\.claude\hooks\*.ps1 .
+
+# Or create manually:
+@"
+#!/usr/bin/env pwsh
+`$input | & "`$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+"@ | Out-File -FilePath skill-activation-prompt.ps1 -Encoding UTF8
+```
+
 ### Step 3: Configure settings.json
 
+#### Linux / macOS
 ```json
 {
   "hooks": {
@@ -117,6 +162,24 @@ chmod +x skill-activation-prompt.sh
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Windows
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.ps1"
           }
         ]
       }
@@ -296,17 +359,48 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ### Platform-Specific Wrappers
 
-**Linux/macOS:**
+**Linux/macOS (Bash):**
 ```bash
 #!/bin/bash
+# skill-activation-prompt.sh
+
+# Read from stdin and pipe to Rust binary
 cat | ~/.claude-hooks/bin/skill-activation-prompt
 ```
 
 **Windows (PowerShell):**
 ```powershell
+#!/usr/bin/env pwsh
 # skill-activation-prompt.ps1
-$input | & "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+
+# Primary: Use standalone installation
+$standaloneExe = "$env:USERPROFILE\.claude-hooks\bin\skill-activation-prompt.exe"
+
+# Fallback: Use project-local binary
+$projectExe = "$env:CLAUDE_PROJECT_DIR\target\release\skill-activation-prompt.exe"
+
+if (Test-Path $standaloneExe) {
+    # Use standalone installation
+    $input | & $standaloneExe
+} elseif (Test-Path $projectExe) {
+    # Fallback to project-local binary
+    $input | & $projectExe
+} else {
+    # Binary not found - provide helpful error
+    Write-Error @"
+skill-activation-prompt.exe not found!
+
+Please install the hooks first:
+  .\install.ps1
+
+Or build locally:
+  cargo build --release
+"@
+    exit 1
+}
 ```
+
+**Note:** The Windows wrapper includes fallback logic and helpful error messages, which is especially useful during development or initial setup.
 
 ---
 

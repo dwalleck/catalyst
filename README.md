@@ -10,6 +10,8 @@ Born from 6 months of production use, Catalyst provides battle-tested Rust hooks
 
 ## Quick Start
 
+### Linux / macOS
+
 ```bash
 # Install Rust (if needed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -22,6 +24,22 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 **That's it!** Binaries are installed to `~/.claude-hooks/bin/`
+
+### Windows
+
+```powershell
+# Install Rust (if needed)
+# Visit: https://rustup.rs/
+# Or: winget install Rustlang.Rustup
+
+# Build and install
+.\install.ps1
+
+# For SQLite-backed state management
+.\install.ps1 -Sqlite
+```
+
+**That's it!** Binaries are installed to `%USERPROFILE%\.claude-hooks\bin\`
 
 ---
 
@@ -117,6 +135,7 @@ Result: 1.8MB stripped binary with ~2ms startup.
 
 **Build once, use everywhere:**
 
+#### Linux / macOS
 ```bash
 # From catalyst directory
 ./install.sh
@@ -126,6 +145,17 @@ Result: 1.8MB stripped binary with ~2ms startup.
 ```
 
 Installs to `~/.claude-hooks/bin/` for use across all projects.
+
+#### Windows
+```powershell
+# From catalyst directory
+.\install.ps1
+
+# Or with SQLite support
+.\install.ps1 -Sqlite
+```
+
+Installs to `%USERPROFILE%\.claude-hooks\bin\` for use across all projects.
 
 ### Option 2: Per-Project
 
@@ -146,6 +176,8 @@ cargo build --release
 
 Create thin wrappers in your project's `.claude/hooks/`:
 
+#### Linux / macOS
+
 ```bash
 cd your-project/.claude/hooks/
 
@@ -157,10 +189,24 @@ EOF
 chmod +x skill-activation-prompt.sh
 ```
 
+#### Windows
+
+```powershell
+cd your-project\.claude\hooks\
+
+# Copy PowerShell wrappers from catalyst
+Copy-Item catalyst\.claude\hooks\*.ps1 .
+
+# Or create manually:
+# skill-activation-prompt.ps1
+# post-tool-use-tracker.ps1
+```
+
 ### Configuration
 
 Add to `.claude/settings.json`:
 
+#### Linux / macOS
 ```json
 {
   "hooks": {
@@ -170,6 +216,24 @@ Add to `.claude/settings.json`:
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Windows
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.ps1"
           }
         ]
       }
@@ -324,8 +388,9 @@ The `.claude/` directory contains production-tested examples:
 - documentation-architect
 - And 6 more...
 
-### Hooks (Bash)
-- post-tool-use-tracker.sh - File tracking (no deps)
+### Hooks (Bash + PowerShell)
+- post-tool-use-tracker.sh/.ps1 - File tracking (no deps)
+- skill-activation-prompt.sh/.ps1 - Skill auto-activation
 - tsc-check.sh - TypeScript compilation checks
 - trigger-build-resolver.sh - Auto-fix build errors
 
