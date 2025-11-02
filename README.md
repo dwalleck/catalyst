@@ -365,6 +365,8 @@ cargo build --release --target x86_64-pc-windows-msvc
 - **[docs/standalone-installation.md](docs/standalone-installation.md)** - Complete setup guide
 - **[docs/performance-comparison.md](docs/performance-comparison.md)** - Performance analysis
 - **[docs/databases.md](docs/databases.md)** - SQLite state management
+- **[docs/rust-lessons/index.md](docs/rust-lessons/index.md)** - Rust best practices and lessons learned
+- **[docs/powershell-lessons.md](docs/powershell-lessons.md)** - PowerShell best practices and gotchas
 - **[CLAUDE.md](CLAUDE.md)** - Integration guide for Claude Code
 - **[PROJECT_DESIGN.md](PROJECT_DESIGN.md)** - Architecture documentation
 

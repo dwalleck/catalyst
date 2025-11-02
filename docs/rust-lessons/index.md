@@ -237,4 +237,12 @@ This guide consolidates related topics that were previously scattered:
 
 ---
 
+## 🔗 Related Documentation
+
+- **[PowerShell Lessons Learned](../powershell-lessons.md)** - Best practices for PowerShell script development
+- **[Performance Comparison](../performance-comparison.md)** - Rust vs interpreted languages
+- **[Standalone Installation](../standalone-installation.md)** - Cross-platform setup guide
+
+---
+
 **Ready to learn?** Start with the [Quick Reference Checklist →](quick-reference.md)

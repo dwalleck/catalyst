@@ -1,5 +1,8 @@
 #!/usr/bin/env pwsh
 # install.ps1 - Windows installation script for Catalyst hooks
+#
+# For PowerShell best practices and lessons learned while writing this script,
+# see: docs/powershell-lessons.md
 
 param(
     [switch]$Sqlite,
