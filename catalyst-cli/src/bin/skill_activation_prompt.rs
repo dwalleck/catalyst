@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use colored::*;
 use regex::Regex;
 use serde::Deserialize;
@@ -7,7 +6,30 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
+use thiserror::Error;
 use tracing::debug;
+
+#[derive(Error, Debug)]
+enum SkillActivationError {
+    #[error("Failed to read input from stdin")]
+    StdinRead(#[from] io::Error),
+
+    #[error("Invalid JSON input from hook: {0}")]
+    InvalidHookInput(#[source] serde_json::Error),
+
+    #[error("Skill rules file not found at {path}\nMake sure the file exists and CLAUDE_PROJECT_DIR is set correctly")]
+    RulesNotFound { path: String },
+
+    #[error("Failed to read skill rules from {path}: {source}")]
+    RulesReadFailed {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("Invalid JSON in skill rules file: {0}\nCheck the syntax in .claude/skills/skill-rules.json")]
+    InvalidRulesJson(#[source] serde_json::Error),
+}
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
@@ -116,7 +138,7 @@ struct MatchedSkill {
     priority: String,
 }
 
-fn main() -> Result<()> {
+fn run() -> Result<(), SkillActivationError> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -129,7 +151,8 @@ fn main() -> Result<()> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
-    let data: HookInput = serde_json::from_str(&input).context("Failed to parse hook input")?;
+    let data: HookInput =
+        serde_json::from_str(&input).map_err(SkillActivationError::InvalidHookInput)?;
 
     // Phase 2.5: Lowercase prompt once for efficient substring matching
     let prompt = &data.prompt;
@@ -145,10 +168,20 @@ fn main() -> Result<()> {
         .join("skills")
         .join("skill-rules.json");
 
-    let rules_content =
-        fs::read_to_string(&rules_path).context("Failed to read skill-rules.json")?;
+    let rules_content = fs::read_to_string(&rules_path).map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            SkillActivationError::RulesNotFound {
+                path: rules_path.display().to_string(),
+            }
+        } else {
+            SkillActivationError::RulesReadFailed {
+                path: rules_path.display().to_string(),
+                source: e,
+            }
+        }
+    })?;
     let rules: SkillRules =
-        serde_json::from_str(&rules_content).context("Failed to parse skill-rules.json")?;
+        serde_json::from_str(&rules_content).map_err(SkillActivationError::InvalidRulesJson)?;
 
     debug!("Loaded {} skills from rules", rules.skills.len());
 
@@ -264,6 +297,13 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]

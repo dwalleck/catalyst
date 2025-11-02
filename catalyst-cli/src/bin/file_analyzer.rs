@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use clap::Parser;
 use colored::*;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -8,7 +7,27 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use thiserror::Error;
 use tracing::{debug, info, warn};
+
+#[derive(Error, Debug)]
+enum FileAnalyzerError {
+    #[error("Directory does not exist: {path}\nPlease provide a valid directory path")]
+    DirectoryNotFound { path: String },
+
+    #[error("Failed to read file {path}: {source}")]
+    FileReadFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Permission denied reading {path}\nCheck file permissions or run with appropriate access rights")]
+    PermissionDenied { path: String },
+
+    #[error("Failed to serialize JSON output: {0}")]
+    JsonSerializationFailed(#[from] serde_json::Error),
+}
 
 // Pre-compile regex patterns at module initialization (CRITICAL PERFORMANCE IMPROVEMENT)
 static TRY_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"try\s*\{|try:|except:").unwrap());
@@ -131,9 +150,19 @@ fn should_analyze(path: &Path) -> bool {
     CODE_EXTENSIONS.is_match(path)
 }
 
-fn analyze_file(path: &Path) -> Result<FileAnalysis> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+fn analyze_file(path: &Path) -> Result<FileAnalysis, FileAnalyzerError> {
+    let content = fs::read_to_string(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            FileAnalyzerError::PermissionDenied {
+                path: path.display().to_string(),
+            }
+        } else {
+            FileAnalyzerError::FileReadFailed {
+                path: path.display().to_string(),
+                source: e,
+            }
+        }
+    })?;
 
     // Use pre-compiled static regexes (10-100x faster than compiling on each call)
     Ok(FileAnalysis {
@@ -215,7 +244,7 @@ fn print_text_results(stats: &Stats, elapsed: std::time::Duration, use_color: bo
     }
 }
 
-fn main() -> Result<()> {
+fn run() -> Result<(), FileAnalyzerError> {
     let args = Args::parse();
 
     // Disable colors if requested or if NO_COLOR is set
@@ -235,7 +264,9 @@ fn main() -> Result<()> {
     info!("Analyzing directory: {:?}", args.directory);
 
     if !args.directory.exists() {
-        anyhow::bail!("Directory does not exist: {}", args.directory.display());
+        return Err(FileAnalyzerError::DirectoryNotFound {
+            path: args.directory.display().to_string(),
+        });
     }
 
     let start = Instant::now();
@@ -350,6 +381,13 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]
