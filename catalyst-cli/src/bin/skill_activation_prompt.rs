@@ -17,12 +17,12 @@ enum SkillActivationError {
     #[error("Invalid JSON input from hook: {0}")]
     InvalidHookInput(#[source] serde_json::Error),
 
-    #[error("Skill rules file not found at {path}\nMake sure the file exists and CLAUDE_PROJECT_DIR is set correctly")]
-    RulesNotFound { path: String },
+    #[error("Skill rules file not found at {}\nMake sure the file exists and CLAUDE_PROJECT_DIR is set correctly", path.display())]
+    RulesNotFound { path: PathBuf },
 
-    #[error("Failed to read skill rules from {path}: {source}")]
+    #[error("Failed to read skill rules from {}: {source}", path.display())]
     RulesReadFailed {
-        path: String,
+        path: PathBuf,
         #[source]
         source: io::Error,
     },
@@ -131,6 +131,18 @@ struct SkillRules {
     skills: HashMap<String, SkillRule>,
 }
 
+/// Maps io::Error to SkillActivationError for file reading operations
+fn map_file_read_error(path: PathBuf, error: io::Error) -> SkillActivationError {
+    if error.kind() == io::ErrorKind::NotFound {
+        SkillActivationError::RulesNotFound { path }
+    } else {
+        SkillActivationError::RulesReadFailed {
+            path,
+            source: error,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct MatchedSkill {
     name: String,
@@ -168,18 +180,8 @@ fn run() -> Result<(), SkillActivationError> {
         .join("skills")
         .join("skill-rules.json");
 
-    let rules_content = fs::read_to_string(&rules_path).map_err(|e| {
-        if e.kind() == io::ErrorKind::NotFound {
-            SkillActivationError::RulesNotFound {
-                path: rules_path.display().to_string(),
-            }
-        } else {
-            SkillActivationError::RulesReadFailed {
-                path: rules_path.display().to_string(),
-                source: e,
-            }
-        }
-    })?;
+    let rules_content =
+        fs::read_to_string(&rules_path).map_err(|e| map_file_read_error(rules_path.clone(), e))?;
     let rules: SkillRules =
         serde_json::from_str(&rules_content).map_err(SkillActivationError::InvalidRulesJson)?;
 
@@ -542,5 +544,84 @@ mod tests {
         let rules = result.unwrap();
         assert_eq!(rules.skills.len(), 1);
         assert!(rules.skills.contains_key("backend-dev-guidelines"));
+    }
+
+    #[test]
+    fn test_error_message_rules_not_found() {
+        let path = PathBuf::from("/nonexistent/.claude/skills/skill-rules.json");
+        let error = SkillActivationError::RulesNotFound { path };
+
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("Skill rules file not found"));
+        assert!(error_msg.contains("/nonexistent/.claude/skills/skill-rules.json"));
+        assert!(error_msg.contains("Make sure the file exists"));
+        assert!(error_msg.contains("CLAUDE_PROJECT_DIR"));
+    }
+
+    #[test]
+    fn test_error_message_rules_read_failed() {
+        let path = PathBuf::from("/test/skill-rules.json");
+        let io_err = io::Error::new(io::ErrorKind::Other, "disk error");
+        let error = SkillActivationError::RulesReadFailed {
+            path,
+            source: io_err,
+        };
+
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("Failed to read skill rules"));
+        assert!(error_msg.contains("/test/skill-rules.json"));
+        assert!(error_msg.contains("disk error"));
+    }
+
+    #[test]
+    fn test_error_message_invalid_hook_input() {
+        let json_err = serde_json::from_str::<HookInput>("invalid").unwrap_err();
+        let error = SkillActivationError::InvalidHookInput(json_err);
+
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("Invalid JSON input from hook"));
+    }
+
+    #[test]
+    fn test_error_message_invalid_rules_json() {
+        let json_err = serde_json::from_str::<SkillRules>("invalid").unwrap_err();
+        let error = SkillActivationError::InvalidRulesJson(json_err);
+
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("Invalid JSON in skill rules file"));
+        assert!(error_msg.contains("Check the syntax"));
+        assert!(error_msg.contains(".claude/skills/skill-rules.json"));
+    }
+
+    #[test]
+    fn test_map_file_read_error_not_found() {
+        let path = PathBuf::from("/test/path");
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
+        let error = map_file_read_error(path.clone(), io_err);
+
+        match error {
+            SkillActivationError::RulesNotFound { path: err_path } => {
+                assert_eq!(err_path, path);
+            }
+            _ => panic!("Expected RulesNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_map_file_read_error_other() {
+        let path = PathBuf::from("/test/path");
+        let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "access denied");
+        let error = map_file_read_error(path.clone(), io_err);
+
+        match error {
+            SkillActivationError::RulesReadFailed {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, path);
+                assert_eq!(source.to_string(), "access denied");
+            }
+            _ => panic!("Expected RulesReadFailed error"),
+        }
     }
 }
