@@ -22,6 +22,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 once_cell = { workspace = true }
 walkdir = { workspace = true }
 

@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use clap::Parser;
 use colored::*;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -8,7 +7,27 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use thiserror::Error;
+use tracing::{debug, error, info, warn};
+
+#[derive(Error, Debug)]
+enum FileAnalyzerError {
+    #[error("[FA001] Directory does not exist: {}\nPlease provide a valid directory path\nTry: mkdir -p {}", path.display(), path.display())]
+    DirectoryNotFound { path: PathBuf },
+
+    #[error("[FA002] Failed to read file {}: {source}\nCheck file permissions", path.display())]
+    FileReadFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("[FA003] Permission denied reading {}\nCheck file permissions or run with appropriate access rights\nTry: chmod +r {}", path.display(), path.display())]
+    PermissionDenied { path: PathBuf },
+
+    #[error("[FA004] Failed to serialize JSON output: {0}")]
+    JsonSerializationFailed(#[from] serde_json::Error),
+}
 
 // Pre-compile regex patterns at module initialization (CRITICAL PERFORMANCE IMPROVEMENT)
 static TRY_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"try\s*\{|try:|except:").unwrap());
@@ -21,6 +40,31 @@ static CONTROLLER_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 static API_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"fetch\(|axios\.|HttpClient|apiClient\.").unwrap());
+
+/// Maps io::Error to FileAnalyzerError for file reading operations
+fn map_file_read_error(path: PathBuf, error: std::io::Error) -> FileAnalyzerError {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        error!(
+            error_code = "FA003",
+            error_kind = "PermissionDenied",
+            path = %path.display(),
+            "Permission denied reading file"
+        );
+        FileAnalyzerError::PermissionDenied { path }
+    } else {
+        error!(
+            error_code = "FA002",
+            error_kind = "FileReadFailed",
+            path = %path.display(),
+            io_error = %error,
+            "Failed to read file"
+        );
+        FileAnalyzerError::FileReadFailed {
+            path,
+            source: error,
+        }
+    }
+}
 
 // Pre-compiled globsets for efficient pattern matching (Phase 2.5 optimization)
 static CODE_EXTENSIONS: Lazy<GlobSet> = Lazy::new(|| {
@@ -131,9 +175,9 @@ fn should_analyze(path: &Path) -> bool {
     CODE_EXTENSIONS.is_match(path)
 }
 
-fn analyze_file(path: &Path) -> Result<FileAnalysis> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+fn analyze_file(path: &Path) -> Result<FileAnalysis, FileAnalyzerError> {
+    let content =
+        fs::read_to_string(path).map_err(|e| map_file_read_error(path.to_path_buf(), e))?;
 
     // Use pre-compiled static regexes (10-100x faster than compiling on each call)
     Ok(FileAnalysis {
@@ -215,7 +259,7 @@ fn print_text_results(stats: &Stats, elapsed: std::time::Duration, use_color: bo
     }
 }
 
-fn main() -> Result<()> {
+fn run() -> Result<(), FileAnalyzerError> {
     let args = Args::parse();
 
     // Disable colors if requested or if NO_COLOR is set
@@ -235,7 +279,15 @@ fn main() -> Result<()> {
     info!("Analyzing directory: {:?}", args.directory);
 
     if !args.directory.exists() {
-        anyhow::bail!("Directory does not exist: {}", args.directory.display());
+        error!(
+            error_code = "FA001",
+            error_kind = "DirectoryNotFound",
+            path = %args.directory.display(),
+            "Directory does not exist"
+        );
+        return Err(FileAnalyzerError::DirectoryNotFound {
+            path: args.directory.clone(),
+        });
     }
 
     let start = Instant::now();
@@ -350,6 +402,13 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]
@@ -668,5 +727,114 @@ mod tests {
         assert!(!should_analyze(&PathBuf::from(
             "//storage/share/app.test.ts"
         )));
+    }
+
+    #[test]
+    fn test_error_message_directory_not_found() {
+        let path = PathBuf::from("/nonexistent/directory");
+        let error = FileAnalyzerError::DirectoryNotFound { path };
+
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("[FA001]"));
+        assert!(error_msg.contains("Directory does not exist"));
+        assert!(error_msg.contains("/nonexistent/directory"));
+        assert!(error_msg.contains("Please provide a valid directory path"));
+        assert!(error_msg.contains("Try: mkdir -p"));
+    }
+
+    #[test]
+    fn test_error_message_file_read_failed() {
+        let path = PathBuf::from("/test/file.ts");
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk error");
+        let error = FileAnalyzerError::FileReadFailed {
+            path,
+            source: io_err,
+        };
+
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("[FA002]"));
+        assert!(error_msg.contains("Failed to read file"));
+        assert!(error_msg.contains("/test/file.ts"));
+        assert!(error_msg.contains("disk error"));
+        assert!(error_msg.contains("Check file permissions"));
+    }
+
+    #[test]
+    fn test_error_message_permission_denied() {
+        let path = PathBuf::from("/restricted/file.ts");
+        let error = FileAnalyzerError::PermissionDenied { path };
+
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("[FA003]"));
+        assert!(error_msg.contains("Permission denied reading"));
+        assert!(error_msg.contains("/restricted/file.ts"));
+        assert!(error_msg.contains("Check file permissions"));
+        assert!(error_msg.contains("run with appropriate access rights"));
+        assert!(error_msg.contains("Try: chmod +r"));
+    }
+
+    #[test]
+    fn test_error_message_json_serialization_failed() {
+        // Create a circular reference that can't be serialized
+        // For this simple test, we'll just verify the error type wraps correctly
+        use serde_json::Value;
+        let invalid_json = r#"{"unclosed": "#;
+        let json_err = serde_json::from_str::<Value>(invalid_json).unwrap_err();
+        let error = FileAnalyzerError::JsonSerializationFailed(json_err);
+
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("[FA004]"));
+        assert!(error_msg.contains("Failed to serialize JSON output"));
+    }
+
+    #[test]
+    fn test_map_file_read_error_permission_denied() {
+        let path = PathBuf::from("/test/path");
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let error = map_file_read_error(path.clone(), io_err);
+
+        match error {
+            FileAnalyzerError::PermissionDenied { path: err_path } => {
+                assert_eq!(err_path, path);
+            }
+            _ => panic!("Expected PermissionDenied error"),
+        }
+    }
+
+    #[test]
+    fn test_map_file_read_error_other() {
+        let path = PathBuf::from("/test/path");
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk error");
+        let error = map_file_read_error(path.clone(), io_err);
+
+        match error {
+            FileAnalyzerError::FileReadFailed {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, path);
+                assert_eq!(source.to_string(), "disk error");
+            }
+            _ => panic!("Expected FileReadFailed error"),
+        }
+    }
+
+    #[test]
+    fn test_map_file_read_error_not_found() {
+        let path = PathBuf::from("/test/path");
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let error = map_file_read_error(path.clone(), io_err);
+
+        // NotFound should map to FileReadFailed, not a separate error type
+        match error {
+            FileAnalyzerError::FileReadFailed {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, path);
+                assert_eq!(source.to_string(), "file not found");
+            }
+            _ => panic!("Expected FileReadFailed error for NotFound kind"),
+        }
     }
 }
