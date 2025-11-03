@@ -8,24 +8,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Error, Debug)]
 enum FileAnalyzerError {
-    #[error("Directory does not exist: {}\nPlease provide a valid directory path", path.display())]
+    #[error("[FA001] Directory does not exist: {}\nPlease provide a valid directory path\nTry: mkdir -p {}", path.display(), path.display())]
     DirectoryNotFound { path: PathBuf },
 
-    #[error("Failed to read file {}: {source}", path.display())]
+    #[error("[FA002] Failed to read file {}: {source}\nCheck file permissions", path.display())]
     FileReadFailed {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("Permission denied reading {}\nCheck file permissions or run with appropriate access rights", path.display())]
+    #[error("[FA003] Permission denied reading {}\nCheck file permissions or run with appropriate access rights\nTry: chmod +r {}", path.display(), path.display())]
     PermissionDenied { path: PathBuf },
 
-    #[error("Failed to serialize JSON output: {0}")]
+    #[error("[FA004] Failed to serialize JSON output: {0}")]
     JsonSerializationFailed(#[from] serde_json::Error),
 }
 
@@ -44,8 +44,21 @@ static API_REGEX: Lazy<Regex> =
 /// Maps io::Error to FileAnalyzerError for file reading operations
 fn map_file_read_error(path: PathBuf, error: std::io::Error) -> FileAnalyzerError {
     if error.kind() == std::io::ErrorKind::PermissionDenied {
+        error!(
+            error_code = "FA003",
+            error_kind = "PermissionDenied",
+            path = %path.display(),
+            "Permission denied reading file"
+        );
         FileAnalyzerError::PermissionDenied { path }
     } else {
+        error!(
+            error_code = "FA002",
+            error_kind = "FileReadFailed",
+            path = %path.display(),
+            io_error = %error,
+            "Failed to read file"
+        );
         FileAnalyzerError::FileReadFailed {
             path,
             source: error,
@@ -266,6 +279,12 @@ fn run() -> Result<(), FileAnalyzerError> {
     info!("Analyzing directory: {:?}", args.directory);
 
     if !args.directory.exists() {
+        error!(
+            error_code = "FA001",
+            error_kind = "DirectoryNotFound",
+            path = %args.directory.display(),
+            "Directory does not exist"
+        );
         return Err(FileAnalyzerError::DirectoryNotFound {
             path: args.directory.clone(),
         });
@@ -716,9 +735,11 @@ mod tests {
         let error = FileAnalyzerError::DirectoryNotFound { path };
 
         let error_msg = error.to_string();
+        assert!(error_msg.contains("[FA001]"));
         assert!(error_msg.contains("Directory does not exist"));
         assert!(error_msg.contains("/nonexistent/directory"));
         assert!(error_msg.contains("Please provide a valid directory path"));
+        assert!(error_msg.contains("Try: mkdir -p"));
     }
 
     #[test]
@@ -731,9 +752,11 @@ mod tests {
         };
 
         let error_msg = error.to_string();
+        assert!(error_msg.contains("[FA002]"));
         assert!(error_msg.contains("Failed to read file"));
         assert!(error_msg.contains("/test/file.ts"));
         assert!(error_msg.contains("disk error"));
+        assert!(error_msg.contains("Check file permissions"));
     }
 
     #[test]
@@ -742,10 +765,12 @@ mod tests {
         let error = FileAnalyzerError::PermissionDenied { path };
 
         let error_msg = error.to_string();
+        assert!(error_msg.contains("[FA003]"));
         assert!(error_msg.contains("Permission denied reading"));
         assert!(error_msg.contains("/restricted/file.ts"));
         assert!(error_msg.contains("Check file permissions"));
         assert!(error_msg.contains("run with appropriate access rights"));
+        assert!(error_msg.contains("Try: chmod +r"));
     }
 
     #[test]
@@ -758,6 +783,7 @@ mod tests {
         let error = FileAnalyzerError::JsonSerializationFailed(json_err);
 
         let error_msg = error.to_string();
+        assert!(error_msg.contains("[FA004]"));
         assert!(error_msg.contains("Failed to serialize JSON output"));
     }
 
