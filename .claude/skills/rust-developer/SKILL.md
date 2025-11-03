@@ -50,6 +50,33 @@ Review [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep
 - Perfect for code review or quick lookup
 - Can be scanned in under 2 minutes
 
+### Additional Patterns
+
+**[rust-patterns.md](rust-patterns.md)** - ~555 lines
+
+**When to use:**
+- Choosing between thiserror and anyhow
+- Input validation at boundaries
+- Concurrent database access
+- Preventing SQL injection
+- Ownership patterns (borrow vs owned)
+- Testing error paths
+
+**Topics covered:**
+- thiserror vs anyhow (when to use each)
+- Input validation with validator crate
+- Arc<Mutex<T>> for thread-safe shared state
+- Parameterized queries for SQL injection prevention
+- Ownership patterns (borrow params, return owned)
+- Testing error paths explicitly
+- Match-based error classification
+
+**Skill level:** Intermediate
+
+**Complements:** Error Handling, Type Safety, Common Footguns
+
+---
+
 ### Deep-Dive Guides (Comprehensive Learning)
 
 #### 1. Fundamentals
@@ -123,6 +150,7 @@ Review [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep
 
 **Topics covered:**
 - Constants → Enums progression
+- Newtype pattern for preventing type confusion
 - Validation at boundaries
 - User-friendly error messages
 - "Did you mean?" suggestions with edit distance
@@ -201,17 +229,25 @@ For developers writing production-quality Rust:
    - All Option/Result patterns
    - Path operation footguns
 
-2. **[File I/O Safety](../../../docs/rust-lessons/file-io-deep-dive.md)**
+2. **[Rust Patterns](rust-patterns.md)** (NEW!)
+   - thiserror vs anyhow
+   - Input validation
+   - Ownership patterns
+   - Arc<Mutex<T>> for concurrency
+   - SQL injection prevention
+   - Testing error paths
+
+3. **[File I/O Safety](../../../docs/rust-lessons/file-io-deep-dive.md)**
    - Atomic writes
    - Safe file operations
    - Testing file I/O
 
-3. **[Type Safety](../../../docs/rust-lessons/type-safety-deep-dive.md)**
+4. **[Type Safety](../../../docs/rust-lessons/type-safety-deep-dive.md)**
    - Constants → Enums progression
    - Validation patterns
    - User-friendly errors
 
-4. **[Common Footguns](../../../docs/rust-lessons/common-footguns.md)**
+5. **[Common Footguns](../../../docs/rust-lessons/common-footguns.md)**
    - TOCTOU races
    - Borrow checker patterns
 
@@ -255,16 +291,25 @@ When reviewing Rust PRs, check against:
 
 | Topic | Resource |
 |-------|----------|
+| **anyhow vs thiserror** | [Rust Patterns](rust-patterns.md) |
+| **Arc<Mutex<T>> Pattern** | [Rust Patterns](rust-patterns.md) |
 | **Atomic File Writes** | [File I/O Deep Dive](../../../docs/rust-lessons/file-io-deep-dive.md) |
 | **Borrow Checker Issues** | [Common Footguns](../../../docs/rust-lessons/common-footguns.md) |
 | **CLI User Feedback** | [Fundamentals](../../../docs/rust-lessons/fundamentals-deep-dive.md) |
+| **Concurrent Database Access** | [Rust Patterns](rust-patterns.md) |
+| **Error Classification** | [Rust Patterns](rust-patterns.md) |
 | **Error Handling Patterns** | [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep-dive.md) |
 | **Enums vs Strings** | [Type Safety Deep Dive](../../../docs/rust-lessons/type-safety-deep-dive.md) |
 | **expect() vs unwrap()** | [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep-dive.md) |
+| **Newtype Pattern** | [Type Safety Deep Dive](../../../docs/rust-lessons/type-safety-deep-dive.md) |
+| **Input Validation** | [Rust Patterns](rust-patterns.md) |
 | **Loop Optimizations** | [Performance Deep Dive](../../../docs/rust-lessons/performance-deep-dive.md) |
 | **Option Handling** | [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep-dive.md) |
+| **Ownership Patterns** | [Rust Patterns](rust-patterns.md) |
 | **Path Operations** | [Common Footguns](../../../docs/rust-lessons/common-footguns.md) |
 | **Performance Profiling** | [Performance Deep Dive](../../../docs/rust-lessons/performance-deep-dive.md) |
+| **SQL Injection Prevention** | [Rust Patterns](rust-patterns.md) |
+| **Testing Error Paths** | [Rust Patterns](rust-patterns.md) |
 | **TOCTOU Races** | [Common Footguns](../../../docs/rust-lessons/common-footguns.md) |
 | **Tracing Setup** | [Fundamentals](../../../docs/rust-lessons/fundamentals-deep-dive.md) |
 | **Validation Patterns** | [Type Safety Deep Dive](../../../docs/rust-lessons/type-safety-deep-dive.md) |

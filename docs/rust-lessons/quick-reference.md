@@ -9,7 +9,7 @@
 - Click deep-dive links for detailed examples
 - Each lesson: Rule + Quick check + Example + Full guide link
 
-[◀ Back to Index](index.md) | **Total:** 20 lessons
+[◀ Back to Index](index.md) | **Total:** 21 lessons
 
 ---
 
@@ -587,7 +587,44 @@ settings.add_hook(HookEvent::InvalidEvent, config);      // ❌ Compile error!
 
 ---
 
-## 20. "Did You Mean" Suggestions with Levenshtein Distance
+## 20. The Newtype Pattern for Preventing Type Confusion
+
+**Rule:** ✅ Wrap primitives in distinct types to prevent mixing up IDs, units, paths | ❌ Using raw primitives allows parameter order mistakes
+
+**Quick Check:**
+
+- Multiple IDs with same primitive type (UserId, AssessmentId both i32)?
+- Function parameters that could be swapped (all String or all i32)?
+- Values with units that could be confused (meters vs kilometers)?
+- Different file paths that shouldn't be mixed?
+
+**Common Pattern:**
+
+```rust
+// ✅ CORRECT - Distinct newtype wrappers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UserId(i32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AssessmentId(i32);
+
+fn get_user_assessment(user_id: UserId, assessment_id: AssessmentId) -> Result<Assessment> {
+    // Compiler prevents parameter swap!
+}
+
+// Usage
+get_user_assessment(UserId(42), AssessmentId(7));  // ✅ Type-safe
+get_user_assessment(AssessmentId(7), UserId(42));  // ❌ Compile error!
+
+// Zero runtime cost - newtype IS the inner type
+// Access inner value: user_id.0
+```
+
+📖 **[Full Guide: Type Safety →](type-safety-deep-dive.md#4-the-newtype-pattern)**
+
+---
+
+## 21. "Did You Mean" Suggestions with Levenshtein Distance
 
 **Rule:** ✅ Implement suggestions for validation errors on fixed value sets using `strsim` | ❌ Don't just list valid options
 
