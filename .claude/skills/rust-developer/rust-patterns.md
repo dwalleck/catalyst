@@ -284,6 +284,54 @@ pub fn save(&self, data: Data) -> Result<i32> {
 - Use when: many reads, infrequent writes, contention on reads
 - `Arc<RwLock<T>>` pattern: `.read()` for shared access, `.write()` for exclusive access
 
+**RwLock Example:**
+```rust
+use std::sync::{Arc, RwLock};
+
+pub struct Cache {
+    data: Arc<RwLock<HashMap<String, String>>>,
+}
+
+impl Cache {
+    // Read access - multiple threads can read simultaneously
+    pub fn get(&self, key: &str) -> Option<String> {
+        let data = self.data.read().unwrap();  // Shared read lock
+        data.get(key).cloned()
+        // Read lock released here
+    }
+
+    // Write access - exclusive, blocks all readers and writers
+    pub fn insert(&self, key: String, value: String) {
+        let mut data = self.data.write().unwrap();  // Exclusive write lock
+        data.insert(key, value);
+        // Write lock released here
+    }
+}
+
+// Performance benefit: Multiple threads can read concurrently
+// Thread 1: cache.get("foo")  ✅ Can run simultaneously
+// Thread 2: cache.get("bar")  ✅ Can run simultaneously
+// Thread 3: cache.insert(...)  ❌ Waits for readers to finish
+
+// With Mutex: Only ONE thread (reader or writer) at a time
+// With RwLock: MANY readers OR one writer
+```
+
+**When to use RwLock vs Mutex:**
+```rust
+// ✅ Use RwLock when:
+// - 80%+ operations are reads
+// - Read operations take significant time
+// - Many concurrent readers
+// Example: Configuration cache, lookup tables
+
+// ✅ Use Mutex when:
+// - Reads and writes are balanced
+// - Critical sections are very short
+// - Simplicity is preferred
+// Example: Counters, simple state machines
+```
+
 **Lock Scope:**
 ```rust
 // ✅ GOOD: Lock, use, auto-release
@@ -308,9 +356,15 @@ conn.execute("...", params)?;
 
 ## 5. Database Safety: SQL Injection Prevention
 
-**Rule:** Always use parameterized queries. Never string interpolation.
+**Rule:** Always use parameterized queries (also called prepared statements). Never string interpolation.
 
-### Parameterized Queries
+**Why parameterized queries:**
+1. **Security:** Prevents SQL injection attacks by separating SQL code from data
+2. **Performance:** Database can cache query plans and reuse them
+3. **Correctness:** Database driver handles all escaping and type conversions
+4. **Compile-time safety:** Wrong number of parameters = compile error
+
+### Parameterized Queries (Prepared Statements)
 
 ```rust
 // ✅ SAFE: Parameterized query
@@ -362,11 +416,47 @@ conn.execute(
 )?;
 ```
 
-**Why:**
-- Prevents SQL injection attacks
-- Database driver handles escaping
-- Compile-time safety (wrong number of params = compile error)
-- Better performance (query plan caching)
+### Performance Benefits: Prepared Statements
+
+Parameterized queries use **prepared statements** under the hood:
+
+1. **Query Plan Caching:**
+   - Database parses SQL once, reuses the plan for subsequent executions
+   - Significant speedup for repeated queries (10-50% faster)
+
+2. **Network Efficiency:**
+   - Some drivers send only parameters on subsequent calls (not full SQL)
+
+3. **Type Safety:**
+   - Parameters are sent with type information
+   - No string escaping overhead
+
+**Example - Repeated queries:**
+```rust
+// First execution: Database parses and caches plan
+conn.execute("INSERT INTO logs (level, message) VALUES (?1, ?2)", params!["INFO", "Started"])?;
+
+// Subsequent executions: Database reuses cached plan (faster!)
+conn.execute("INSERT INTO logs (level, message) VALUES (?1, ?2)", params!["DEBUG", "Processing"])?;
+conn.execute("INSERT INTO logs (level, message) VALUES (?1, ?2)", params!["INFO", "Completed"])?;
+```
+
+### ORMs Handle This Automatically
+
+If using ORMs like **diesel** or **sea-orm**, parameterization is automatic:
+
+```rust
+// diesel automatically parameterizes
+users::table
+    .filter(users::name.eq(username))  // ✅ Safe - parameterized
+    .first::<User>(&conn)?;
+
+// sea-orm automatically parameterizes
+User::find()
+    .filter(user::Column::Name.eq(username))  // ✅ Safe - parameterized
+    .one(&db)
+    .await?;
+```
 
 ---
 
@@ -376,12 +466,25 @@ conn.execute(
 
 **Preferred Tool:** Use `assert_matches!` macro for cleaner error type verification instead of manual match blocks.
 
+**Setup:** Add the `assert_matches` crate to your dev dependencies:
+```toml
+[dev-dependencies]
+assert_matches = "1.5"
+```
+
+Or use the unstable std feature (nightly Rust only):
+```rust
+#![feature(assert_matches)]
+use std::assert_matches::assert_matches;
+```
+
 ### Test Happy Path AND Error Cases
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;  // Add this import
 
     #[test]
     fn test_calculate_score_success() {
