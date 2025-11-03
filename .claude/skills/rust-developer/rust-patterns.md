@@ -278,6 +278,12 @@ pub fn save(&self, data: Data) -> Result<i32> {
 - Prevents data races at compile time
 - `parking_lot::Mutex` is faster than `std::sync::Mutex`
 
+**RwLock (Read-Write Lock):**
+- For read-heavy workloads with occasional writes
+- Multiple readers OR single writer (not both simultaneously)
+- Use when: many reads, infrequent writes, contention on reads
+- `Arc<RwLock<T>>` pattern: `.read()` for shared access, `.write()` for exclusive access
+
 **Lock Scope:**
 ```rust
 // ✅ GOOD: Lock, use, auto-release
@@ -368,6 +374,8 @@ conn.execute(
 
 **Rule:** Every error path deserves a unit test.
 
+**Preferred Tool:** Use `assert_matches!` macro for cleaner error type verification instead of manual match blocks.
+
 ### Test Happy Path AND Error Cases
 
 ```rust
@@ -389,13 +397,19 @@ mod tests {
         let result = calculate_phq9_score(&responses);
         assert!(result.is_err());
 
-        // Verify error type and message
-        match result {
-            Err(AssessmentError::InvalidFormat(msg)) => {
-                assert!(msg.contains("Expected 9 responses"));
-            }
-            _ => panic!("Expected InvalidFormat error"),
-        }
+        // ✅ PREFERRED: Use assert_matches! for cleaner error type verification
+        assert_matches!(
+            result,
+            Err(AssessmentError::InvalidFormat(ref msg)) if msg.contains("Expected 9 responses")
+        );
+
+        // Alternative (more verbose):
+        // match result {
+        //     Err(AssessmentError::InvalidFormat(msg)) => {
+        //         assert!(msg.contains("Expected 9 responses"));
+        //     }
+        //     _ => panic!("Expected InvalidFormat error"),
+        // }
     }
 
     #[test]
@@ -408,7 +422,7 @@ mod tests {
     #[test]
     fn test_database_not_found() {
         let result = Assessment::get(&db, 99999);  // Non-existent ID
-        assert!(matches!(result, Err(AssessmentError::NotFound(_))));
+        assert_matches!(result, Err(AssessmentError::NotFound(_)));
     }
 }
 ```

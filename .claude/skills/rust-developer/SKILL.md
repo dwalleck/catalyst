@@ -52,7 +52,7 @@ Review [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep
 
 ### Additional Patterns
 
-**[rust-patterns.md](rust-patterns.md)** - ~700 lines
+**[rust-patterns.md](rust-patterns.md)** - ~555 lines
 
 **When to use:**
 - Choosing between thiserror and anyhow
