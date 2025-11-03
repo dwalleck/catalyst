@@ -7,8 +7,9 @@ This guide shows the journey from string-based validation to compile-time type s
 1. **[The Journey: Strings → Constants → Enums](#1-the-journey-strings--constants--enums)** - Progressive improvement path
 2. **[Using Constants for Validation](#2-using-constants-for-validation)** - First step from magic strings
 3. **[Using Enums for Fixed Value Sets](#3-using-enums-for-fixed-value-sets)** - Compile-time safety
-4. **[Immediate Validation in Setters](#4-immediate-validation-in-setters)** - Fail-fast pattern
-5. **["Did You Mean" Suggestions](#5-did-you-mean-suggestions)** - User-friendly validation errors
+4. **[The Newtype Pattern](#4-the-newtype-pattern)** - Preventing type confusion with wrapper types
+5. **[Immediate Validation in Setters](#5-immediate-validation-in-setters)** - Fail-fast pattern
+6. **["Did You Mean" Suggestions](#6-did-you-mean-suggestions)** - User-friendly validation errors
 
 **Quick Reference:** See [quick-reference.md](quick-reference.md) for scannable checklists
 
@@ -376,7 +377,425 @@ pub fn add_hook(&mut self, event: HookEvent, hook_config: HookConfig) -> Result<
 
 ---
 
-## 4. Immediate Validation in Setters
+## 4. The Newtype Pattern
+
+### The Problem
+
+Using primitive types (like `i32`, `u32`, `String`) for different concepts leads to **type confusion** - accidentally mixing up values that have the same underlying type but completely different meanings.
+
+**❌ WRONG - Primitive types everywhere:**
+
+```rust
+// All these IDs are just i32 - easy to mix up!
+fn transfer_points(from_user: i32, to_user: i32, assessment_id: i32, points: i32) -> Result<()> {
+    // Which parameter is which? Compiler can't help!
+    // What if someone calls: transfer_points(points, assessment_id, from_user, to_user)?
+    // All i32, so it compiles... but disaster!
+}
+
+// Similar problem with String types
+fn save_config(db_path: String, config_path: String, backup_path: String) -> Result<()> {
+    // Easy to pass paths in wrong order - all are String!
+}
+
+// Or units that can be confused
+fn calculate_velocity(distance: f64, time: f64) -> f64 {
+    distance / time
+    // Are these meters or kilometers? Seconds or hours?
+    // calculate_velocity(100.0, 2.0) - what does this mean?
+}
+```
+
+**Problems:**
+- Compiler allows mixing up parameters of same primitive type
+- Function signatures don't document units or meaning
+- Typos in parameter order aren't caught
+- No autocomplete hints about what values mean
+- Refactoring is error-prone
+
+### Solution: Newtype Pattern
+
+Wrap primitives in single-field structs to create distinct types:
+
+**✅ CORRECT - Newtype wrappers:**
+
+```rust
+// Distinct types prevent confusion
+struct UserId(i32);
+struct AssessmentId(i32);
+struct Points(i32);
+
+fn transfer_points(
+    from_user: UserId,
+    to_user: UserId,
+    assessment_id: AssessmentId,
+    points: Points
+) -> Result<()> {
+    // Wrong parameter order caught by compiler!
+    // transfer_points(points, assessment_id, from_user, to_user) ❌ Compile error!
+
+    // Access inner value when needed
+    let from_id: i32 = from_user.0;
+    let points_value: i32 = points.0;
+
+    // ... implementation ...
+    Ok(())
+}
+
+// Usage - type safety at call site
+transfer_points(
+    UserId(42),
+    UserId(100),
+    AssessmentId(7),
+    Points(50)
+)?;
+```
+
+### Basic Newtype Implementation
+
+**Minimal implementation:**
+```rust
+// Simple wrapper
+struct UserId(i32);
+
+// Access inner value
+let user_id = UserId(42);
+let id_value: i32 = user_id.0;
+
+// Cannot mix with other i32 values
+let assessment_id: AssessmentId = user_id; // ❌ Compile error - different types!
+```
+
+**Production-ready implementation:**
+```rust
+// Derive common traits for ergonomics
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UserId(i32);
+
+impl UserId {
+    // Constructor with validation
+    pub fn new(id: i32) -> Result<Self> {
+        if id <= 0 {
+            anyhow::bail!("User ID must be positive, got {}", id);
+        }
+        Ok(UserId(id))
+    }
+
+    // Safe getter
+    pub fn get(&self) -> i32 {
+        self.0
+    }
+}
+
+// Display for user-facing output
+impl fmt::Display for UserId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "User#{}", self.0)
+    }
+}
+
+// Usage
+let user_id = UserId::new(42)?;
+println!("{}", user_id); // Prints: User#42
+```
+
+### Common Use Cases
+
+**1. Preventing ID Confusion:**
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UserId(i32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AssessmentId(i32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ResponseId(i32);
+
+// Compiler prevents mixing these up
+fn get_user_assessment(user_id: UserId, assessment_id: AssessmentId) -> Result<Assessment> {
+    // Cannot accidentally swap parameters
+}
+```
+
+**2. Path Type Safety:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabasePath(PathBuf);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigPath(PathBuf);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupPath(PathBuf);
+
+impl DatabasePath {
+    pub fn new(path: PathBuf) -> Result<Self> {
+        // Validate it's a valid database path
+        if path.extension().and_then(|s| s.to_str()) != Some("db") {
+            anyhow::bail!("Database path must end with .db, got: {}", path.display());
+        }
+        Ok(DatabasePath(path))
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+// Usage
+fn init_database(db_path: DatabasePath, backup_path: BackupPath) -> Result<()> {
+    // Cannot accidentally swap paths
+    let conn = Connection::open(db_path.as_path())?;
+    // ...
+}
+```
+
+**3. Unit Type Safety:**
+```rust
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Meters(f64);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Seconds(f64);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MetersPerSecond(f64);
+
+impl MetersPerSecond {
+    pub fn calculate(distance: Meters, time: Seconds) -> Self {
+        MetersPerSecond(distance.0 / time.0)
+    }
+}
+
+// Usage
+let distance = Meters(100.0);
+let time = Seconds(10.0);
+let velocity = MetersPerSecond::calculate(distance, time);
+
+// Cannot accidentally use raw floats
+// let velocity = MetersPerSecond::calculate(100.0, 10.0); // ❌ Compile error
+```
+
+**4. Configuration Values:**
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Port(u16);
+
+impl Port {
+    pub fn new(port: u16) -> Result<Self> {
+        if port < 1024 {
+            anyhow::bail!("Port must be >= 1024 (privileged ports), got {}", port);
+        }
+        Ok(Port(port))
+    }
+
+    pub fn get(&self) -> u16 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaxConnections(usize);
+
+impl MaxConnections {
+    pub fn new(max: usize) -> Result<Self> {
+        if max == 0 {
+            anyhow::bail!("Max connections must be > 0");
+        }
+        Ok(MaxConnections(max))
+    }
+}
+```
+
+### Serde Integration
+
+Newtypes work seamlessly with serde:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(transparent)] // Serialize as the inner type
+pub struct UserId(i32);
+
+// JSON roundtrip
+let user_id = UserId(42);
+let json = serde_json::to_string(&user_id)?; // "42"
+let parsed: UserId = serde_json::from_str(&json)?; // UserId(42)
+
+// In structs
+#[derive(Serialize, Deserialize)]
+pub struct User {
+    id: UserId,        // Serializes as plain i32
+    name: String,
+}
+
+// JSON: {"id": 42, "name": "Alice"}
+```
+
+### Benefits of Newtype Pattern
+
+**1. Compile-Time Safety**
+- Impossible to mix up different ID types
+- Parameter order mistakes caught by compiler
+- Type mismatches caught early
+
+**2. Self-Documenting Code**
+- Function signatures show exactly what's expected
+- No need to document "id1 is user ID, id2 is assessment ID"
+- IDE shows type hints at call sites
+
+**3. Centralized Validation**
+- Validation logic in one place (the constructor)
+- Once constructed, value is known to be valid
+- No need to re-validate throughout code
+
+**4. Safer Refactoring**
+- Changing ID representation (i32 → u64) is easy
+- Compiler finds all usages
+- Change inner type without changing API
+
+**5. Better Type Checking**
+```rust
+// Before (primitives)
+fn process(user: i32, score: i32, attempts: i32) { ... }
+process(score, user, attempts); // ❌ Compiles but wrong!
+
+// After (newtypes)
+fn process(user: UserId, score: Score, attempts: Attempts) { ... }
+process(score, user, attempts); // ✅ Compile error - caught immediately!
+```
+
+### When to Use Newtypes
+
+**Use newtypes for:**
+- ✅ Different kinds of IDs (UserId, PostId, CommentId)
+- ✅ File paths with different purposes (ConfigPath, DataPath, BackupPath)
+- ✅ Values with units (Meters, Seconds, Bytes)
+- ✅ Configuration values with validation (Port, MaxConnections, Timeout)
+- ✅ Preventing primitive obsession (Email, PhoneNumber, ZipCode)
+
+**Keep primitives for:**
+- ❌ Simple counters or temporary calculations
+- ❌ Generic numeric operations
+- ❌ Values that truly are interchangeable
+- ❌ Performance-critical hot paths (though cost is usually negligible)
+
+### Cost and Performance
+
+Newtypes are **zero-cost abstractions:**
+```rust
+struct UserId(i32);
+
+// At runtime, UserId IS an i32
+// No memory overhead, no performance cost
+// #[repr(transparent)] guarantees same layout
+```
+
+Memory layout:
+```rust
+std::mem::size_of::<i32>()     // 4 bytes
+std::mem::size_of::<UserId>()  // 4 bytes - same!
+```
+
+### Pattern: Type Alias vs Newtype
+
+**Type alias (NOT safe):**
+```rust
+type UserId = i32;  // Just an alias, not a new type!
+
+fn process(user_id: UserId, points: i32) {
+    // Can still mix them up - UserId is just i32
+}
+
+let user = 42_i32;
+let points = 100_i32;
+process(points, user); // ❌ Compiles but wrong! Type alias doesn't prevent this.
+```
+
+**Newtype (safe):**
+```rust
+struct UserId(i32);  // New distinct type
+
+fn process(user_id: UserId, points: i32) { ... }
+
+let user = UserId(42);
+let points = 100_i32;
+process(points, user); // ✅ Compile error - caught!
+```
+
+**Rule:** Use newtypes for type safety, not type aliases.
+
+### Real-World Example: Catalyst Database IDs
+
+```rust
+// Before: All IDs are i32
+fn get_assessment_responses(
+    db: &Database,
+    user_id: i32,
+    assessment_id: i32,
+    response_id: i32
+) -> Result<Response> {
+    // Easy to mix these up in queries
+}
+
+// After: Distinct newtype IDs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct UserId(i32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AssessmentId(i32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ResponseId(i32);
+
+fn get_assessment_responses(
+    db: &Database,
+    user_id: UserId,
+    assessment_id: AssessmentId,
+    response_id: ResponseId
+) -> Result<Response> {
+    // Impossible to mix up parameters now!
+    let query = "SELECT * FROM responses WHERE user_id = ?1 AND assessment_id = ?2 AND id = ?3";
+    db.query_row(query, params![user_id.0, assessment_id.0, response_id.0], |row| {
+        // ...
+    })
+}
+```
+
+### Combining with Enums
+
+Newtypes and enums work together:
+
+```rust
+// Newtype for type safety
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UserId(i32);
+
+// Enum for fixed states
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserRole {
+    Admin,
+    User,
+    Guest,
+}
+
+// Both provide different kinds of safety
+struct User {
+    id: UserId,      // Newtype: prevents ID confusion
+    role: UserRole,  // Enum: prevents invalid roles
+}
+```
+
+**[↑ Back to Quick Reference](quick-reference.md)**
+
+---
+
+## 5. Immediate Validation in Setters
 
 ### The Problem
 
@@ -505,7 +924,7 @@ settings.validate()?;  // Validate everything at once
 
 ---
 
-## 5. "Did You Mean" Suggestions
+## 6. "Did You Mean" Suggestions
 
 ### The Problem
 

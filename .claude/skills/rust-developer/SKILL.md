@@ -150,6 +150,7 @@ Review [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep
 
 **Topics covered:**
 - Constants → Enums progression
+- Newtype pattern for preventing type confusion
 - Validation at boundaries
 - User-friendly error messages
 - "Did you mean?" suggestions with edit distance
@@ -300,6 +301,7 @@ When reviewing Rust PRs, check against:
 | **Error Handling Patterns** | [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep-dive.md) |
 | **Enums vs Strings** | [Type Safety Deep Dive](../../../docs/rust-lessons/type-safety-deep-dive.md) |
 | **expect() vs unwrap()** | [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep-dive.md) |
+| **Newtype Pattern** | [Type Safety Deep Dive](../../../docs/rust-lessons/type-safety-deep-dive.md) |
 | **Input Validation** | [Rust Patterns](rust-patterns.md) |
 | **Loop Optimizations** | [Performance Deep Dive](../../../docs/rust-lessons/performance-deep-dive.md) |
 | **Option Handling** | [Error Handling Deep Dive](../../../docs/rust-lessons/error-handling-deep-dive.md) |
