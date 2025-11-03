@@ -25,6 +25,71 @@
                 ]
             }
         },
+        "rust-developer": {
+            "type": "domain",
+            "enforcement": "suggest",
+            "priority": "high",
+            "description": "Comprehensive Rust development guidelines based on 6 months of code reviews",
+            "promptTriggers": {
+                "keywords": [
+                    "rust",
+                    "cargo",
+                    "rustc",
+                    "error handling",
+                    "Option",
+                    "Result",
+                    "unwrap",
+                    "expect",
+                    "thiserror",
+                    "anyhow",
+                    "borrow checker",
+                    "lifetime",
+                    "trait",
+                    "impl",
+                    "file I/O",
+                    "atomic write",
+                    "tempfile",
+                    "type safety",
+                    "enum",
+                    "pattern matching",
+                    "performance",
+                    "optimization",
+                    "zero-copy",
+                    "tracing",
+                    "serde"
+                ],
+                "intentPatterns": [
+                    "(write|create|add|implement|build|modify).*?rust",
+                    "(fix|debug|handle|solve).*?(rust|error|borrow|lifetime)",
+                    "(optimize|improve|performance).*?rust",
+                    "(how to|best practice|idiom).*?rust",
+                    "rust.*?(code|pattern|error|handling|performance)",
+                    "(review|check).*?rust.*(PR|code|pull request)"
+                ]
+            },
+            "fileTriggers": {
+                "pathPatterns": [
+                    "**/*.rs",
+                    "**/Cargo.toml",
+                    "catalyst-core/**/*",
+                    "catalyst-cli/**/*"
+                ],
+                "pathExclusions": [
+                    "**/target/**",
+                    "**/.cargo/**"
+                ],
+                "contentPatterns": [
+                    "Result<",
+                    "Option<",
+                    "impl ",
+                    "trait ",
+                    "#\\[derive\\(",
+                    "thiserror::",
+                    "anyhow::",
+                    "use std::"
+                ]
+            }
+        },
         "backend-dev-guidelines": {
             "type": "domain",
             "enforcement": "suggest",
