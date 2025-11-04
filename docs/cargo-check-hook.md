@@ -2,7 +2,7 @@
 
 **Purpose:** Automatically runs `cargo check` (and optionally clippy, tests, formatting) when you edit Rust files in Claude Code.
 
-**Type:** Stop hook (runs after tool execution completes)
+**Type:** PostToolUse hook (runs after Edit/Write/MultiEdit tools complete)
 
 ---
 
@@ -58,7 +58,7 @@ Add to your project's `.claude/settings.json`:
 ```json
 {
   "hooks": {
-    "Stop": [
+    "PostToolUse": [
       {
         "hooks": [
           {
@@ -76,7 +76,7 @@ Add to your project's `.claude/settings.json`:
 ```json
 {
   "hooks": {
-    "Stop": [
+    "PostToolUse": [
       {
         "hooks": [
           {
