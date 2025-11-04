@@ -1,0 +1,878 @@
+// Cargo check hook - automatically runs cargo check when editing Rust files
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::env;
+use std::fmt::Write as FmtWrite;
+use std::io::{self, BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use thiserror::Error;
+use toml::Value;
+
+// Constants
+const DECISION_BLOCK: &str = "block";
+const MAX_OUTPUT_BYTES: usize = 50_000; // 50KB limit to prevent overwhelming Claude with massive error output
+
+#[derive(Error, Debug)]
+enum CargoCheckError {
+    #[error("[CC001] Failed to read input from stdin")]
+    StdinRead(#[from] io::Error),
+
+    #[error("[CC002] Invalid JSON input from hook: {0}\nCheck that the hook is passing valid JSON format")]
+    InvalidHookInput(#[source] serde_json::Error),
+
+    #[error("[CC003] Could not find Cargo.toml for file: {}\nMake sure the file is in a Cargo project", path.display())]
+    CargoTomlNotFound { path: PathBuf },
+
+    #[error("[CC004] Failed to execute cargo command: {0}")]
+    CargoExecution(#[source] io::Error),
+}
+
+#[derive(Debug, Deserialize)]
+struct HookInput {
+    #[serde(rename = "session_id")]
+    _session_id: String,
+    tool_name: Option<String>,
+    tool_input: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Serialize)]
+struct HookSpecificOutput {
+    #[serde(rename = "hookEventName")]
+    hook_event_name: String,
+    #[serde(rename = "additionalContext")]
+    additional_context: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HookResponse {
+    decision: String,
+    reason: String,
+    #[serde(rename = "hookSpecificOutput")]
+    hook_specific_output: HookSpecificOutput,
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    system_message: Option<String>,
+}
+
+#[derive(Debug)]
+struct CommandResult {
+    success: bool,
+    output: String,
+    exit_code: i32,
+}
+
+#[derive(Debug)]
+enum CargoRoot {
+    Workspace(PathBuf),
+    Package(PathBuf),
+}
+
+impl CargoRoot {
+    fn path(&self) -> &Path {
+        match self {
+            CargoRoot::Workspace(p) | CargoRoot::Package(p) => p,
+        }
+    }
+
+    fn kind(&self) -> &str {
+        match self {
+            CargoRoot::Workspace(_) => "workspace",
+            CargoRoot::Package(_) => "package",
+        }
+    }
+}
+
+/// Checks if an environment variable is set to a truthy value
+/// Accepts: "1", "true", "yes", "on" (case-insensitive)
+fn env_is_enabled(var: &str) -> bool {
+    env::var(var)
+        .map(|v| {
+            let lower = v.to_lowercase();
+            matches!(lower.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+/// Normalizes a path to avoid empty paths (converts "" to ".")
+/// This handles the edge case where relative paths can become empty strings
+fn normalize_path(path: &Path) -> PathBuf {
+    if path.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Truncates output if it exceeds MAX_OUTPUT_BYTES to prevent overwhelming Claude
+/// with massive error output from very large workspaces
+fn truncate_output(output: String) -> String {
+    if output.len() <= MAX_OUTPUT_BYTES {
+        return output;
+    }
+
+    let truncated = &output[..MAX_OUTPUT_BYTES];
+    let bytes_removed = output.len() - MAX_OUTPUT_BYTES;
+
+    format!(
+        "{}\n\n... [Output truncated: {} bytes removed to stay within {} byte limit] ...\n\
+        Hint: Focus on fixing the first few errors shown above.",
+        truncated, bytes_removed, MAX_OUTPUT_BYTES
+    )
+}
+
+/// Checks if a Cargo.toml file defines a workspace using TOML parsing
+fn is_workspace(cargo_toml_path: &Path) -> bool {
+    let debug = env_is_enabled("CARGO_CHECK_DEBUG");
+
+    if debug {
+        eprintln!("[DEBUG] Checking if {:?} is a workspace", cargo_toml_path);
+    }
+
+    match std::fs::read_to_string(cargo_toml_path) {
+        Ok(content) => match content.parse::<Value>() {
+            Ok(toml) => {
+                let is_ws = toml.get("workspace").is_some();
+                if debug {
+                    eprintln!(
+                        "[DEBUG] TOML parsed successfully, workspace section present: {}",
+                        is_ws
+                    );
+                }
+                is_ws
+            }
+            Err(e) => {
+                if debug {
+                    eprintln!("[DEBUG] Failed to parse TOML: {}", e);
+                }
+                false
+            }
+        },
+        Err(e) => {
+            if debug {
+                eprintln!("[DEBUG] Failed to read file: {}", e);
+            }
+            false
+        }
+    }
+}
+
+/// Finds the Cargo.toml root for a given file path
+/// Returns the workspace root if found, otherwise the first package root
+fn find_cargo_root(file_path: &Path) -> Result<CargoRoot, CargoCheckError> {
+    let mut current_dir = file_path
+        .parent()
+        .ok_or_else(|| CargoCheckError::CargoTomlNotFound {
+            path: file_path.to_path_buf(),
+        })?;
+
+    let mut package_root: Option<PathBuf> = None;
+
+    loop {
+        let cargo_toml = current_dir.join("Cargo.toml");
+
+        if cargo_toml.exists() {
+            // Check if this is a workspace using TOML parsing
+            if is_workspace(&cargo_toml) {
+                return Ok(CargoRoot::Workspace(normalize_path(current_dir)));
+            }
+
+            // Remember the first package found
+            if package_root.is_none() {
+                package_root = Some(normalize_path(current_dir));
+            }
+        }
+
+        // Move up one directory
+        match current_dir.parent() {
+            Some(parent) => current_dir = parent,
+            None => break,
+        }
+    }
+
+    // Return the package root if we found one
+    package_root
+        .map(CargoRoot::Package)
+        .ok_or_else(|| CargoCheckError::CargoTomlNotFound {
+            path: file_path.to_path_buf(),
+        })
+}
+
+/// Runs a cargo command and captures output
+fn run_cargo_command(
+    cargo_root: &CargoRoot,
+    command: &str,
+    args: &[&str],
+    emoji: &str,
+    success_msg: &str,
+) -> Result<CommandResult, CargoCheckError> {
+    let quiet = env_is_enabled("CARGO_CHECK_QUIET");
+    let mut output_buffer = String::new();
+
+    if !quiet {
+        writeln!(
+            output_buffer,
+            "{} Running {} on {}...",
+            emoji,
+            command,
+            cargo_root.kind()
+        )
+        .unwrap();
+    }
+
+    // Security: Relies on wrapper script setting trusted PATH
+    // Users should ensure ~/.cargo/bin is in PATH before untrusted directories
+    // The wrapper script sets PATH="$HOME/.cargo/bin:$PATH" to prioritize the user's cargo
+    let mut cmd = Command::new("cargo");
+    cmd.arg(command);
+
+    // Add workspace/all flag for workspace roots BEFORE other args
+    // Note: cargo fmt uses --all instead of --workspace
+    if matches!(cargo_root, CargoRoot::Workspace(_)) {
+        if command == "fmt" {
+            cmd.arg("--all");
+        } else {
+            cmd.arg("--workspace");
+        }
+    }
+
+    // In quiet mode, use -q to suppress "Checking..." messages
+    // Cargo will still output errors even with -q
+    if quiet && command != "fmt" {
+        cmd.arg("-q");
+    }
+
+    // Add additional args
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    // Set working directory
+    cmd.current_dir(cargo_root.path());
+
+    // Capture stdout and stderr
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    // Spawn the command
+    let mut child = cmd.spawn().map_err(CargoCheckError::CargoExecution)?;
+
+    // Capture output streams
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "Failed to capture stdout"))
+        .map_err(CargoCheckError::CargoExecution)?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "Failed to capture stderr"))
+        .map_err(CargoCheckError::CargoExecution)?;
+
+    // Read stdout and stderr concurrently using threads to avoid potential deadlock
+    // If we read them sequentially and cargo fills one pipe buffer, it could block
+    let stdout_thread = std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        reader
+            .lines()
+            .map_while(Result::ok)
+            .filter(|line| !quiet || line.contains("error") || line.contains("warning"))
+            .collect::<Vec<_>>()
+    });
+
+    let stderr_thread = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        reader.lines().map_while(Result::ok).collect::<Vec<_>>()
+    });
+
+    // Join threads and collect output
+    // Use unwrap_or_else to gracefully handle thread panics
+    let stdout_lines = stdout_thread.join().unwrap_or_else(|_| {
+        eprintln!("Warning: stdout reading thread panicked, some output may be lost");
+        Vec::new()
+    });
+    let stderr_lines = stderr_thread.join().unwrap_or_else(|_| {
+        eprintln!("Warning: stderr reading thread panicked, some output may be lost");
+        Vec::new()
+    });
+
+    // Add stdout lines to output buffer
+    for line in stdout_lines {
+        let _ = writeln!(output_buffer, "{}", line);
+    }
+
+    // Add stderr lines to output buffer (always included, even in quiet mode)
+    for line in stderr_lines {
+        let _ = writeln!(output_buffer, "{}", line);
+    }
+
+    // Wait for the command to complete
+    let status = child.wait().map_err(CargoCheckError::CargoExecution)?;
+    // Exit code 101 is used by cargo for compilation errors
+    // If status.code() is None (e.g., terminated by signal on Unix), use 101 as fallback
+    let exit_code = status.code().unwrap_or_else(|| {
+        eprintln!("Warning: cargo process terminated abnormally (possibly by signal), using exit code 101");
+        101
+    });
+
+    if !status.success() {
+        // Add failure summary to output
+        let _ = writeln!(output_buffer);
+        let _ = writeln!(output_buffer, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        let _ = writeln!(
+            output_buffer,
+            "❌ Cargo {} failed with exit code {}",
+            command, exit_code
+        );
+        let _ = writeln!(output_buffer, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+        return Ok(CommandResult {
+            success: false,
+            output: output_buffer,
+            exit_code,
+        });
+    }
+
+    if !quiet {
+        let _ = writeln!(output_buffer, "{}", success_msg);
+    }
+
+    Ok(CommandResult {
+        success: true,
+        output: output_buffer,
+        exit_code: 0,
+    })
+}
+
+/// Runs cargo check and optional additional checks
+/// Returns accumulated output and whether all checks passed
+fn run_all_checks(cargo_root: &CargoRoot) -> Result<CommandResult, CargoCheckError> {
+    let mut accumulated_output = String::new();
+    let mut all_success = true;
+    // Track exit code of first failure (if any) for error reporting
+    let mut first_failure_exit_code = 0;
+
+    // Always run cargo check
+    let result = run_cargo_command(cargo_root, "check", &[], "🦀", "✅ Cargo check passed")?;
+    accumulated_output.push_str(&result.output);
+    if !result.success {
+        all_success = false;
+        first_failure_exit_code = result.exit_code;
+    }
+
+    // Optional: Run clippy if CARGO_CHECK_CLIPPY is enabled
+    if env_is_enabled("CARGO_CHECK_CLIPPY") {
+        let result = run_cargo_command(
+            cargo_root,
+            "clippy",
+            &["--", "-D", "warnings"],
+            "📎",
+            "✅ Clippy passed",
+        )?;
+        accumulated_output.push_str(&result.output);
+        if !result.success {
+            all_success = false;
+            // Only set if not already set (preserve first failure)
+            if first_failure_exit_code == 0 {
+                first_failure_exit_code = result.exit_code;
+            }
+        }
+    }
+
+    // Optional: Run tests (check only, don't execute) if CARGO_CHECK_TESTS is enabled
+    if env_is_enabled("CARGO_CHECK_TESTS") {
+        let result = run_cargo_command(
+            cargo_root,
+            "test",
+            &["--no-run"],
+            "🧪",
+            "✅ Test compilation passed",
+        )?;
+        accumulated_output.push_str(&result.output);
+        if !result.success {
+            all_success = false;
+            // Only set if not already set (preserve first failure)
+            if first_failure_exit_code == 0 {
+                first_failure_exit_code = result.exit_code;
+            }
+        }
+    }
+
+    // Optional: Check formatting if CARGO_CHECK_FMT is enabled
+    if env_is_enabled("CARGO_CHECK_FMT") {
+        let result = run_cargo_command(
+            cargo_root,
+            "fmt",
+            &["--", "--check"],
+            "📝",
+            "✅ Formatting check passed",
+        )?;
+        accumulated_output.push_str(&result.output);
+        if !result.success {
+            all_success = false;
+            // Only set if not already set (preserve first failure)
+            if first_failure_exit_code == 0 {
+                first_failure_exit_code = result.exit_code;
+            }
+        }
+    }
+
+    Ok(CommandResult {
+        success: all_success,
+        output: accumulated_output,
+        exit_code: first_failure_exit_code,
+    })
+}
+
+fn run() -> Result<Option<HookResponse>, CargoCheckError> {
+    // Read JSON input from stdin
+    let mut buffer = String::new();
+    io::stdin().read_to_string(&mut buffer)?;
+
+    // Parse hook input
+    let input: HookInput =
+        serde_json::from_str(&buffer).map_err(CargoCheckError::InvalidHookInput)?;
+
+    // Check if this is a relevant tool (Edit, Write, MultiEdit)
+    let tool_name = match input.tool_name {
+        Some(name) => name,
+        None => return Ok(None), // No tool name, skip
+    };
+
+    if !matches!(tool_name.as_str(), "Edit" | "Write" | "MultiEdit") {
+        return Ok(None); // Not a file editing tool, skip
+    }
+
+    // Extract tool_input
+    let tool_input = match input.tool_input {
+        Some(input) => input,
+        None => return Ok(None), // No tool input, skip
+    };
+
+    // Collect all Rust file paths from the tool input
+    let mut rust_files = Vec::new();
+
+    // Handle MultiEdit tool - has edits array
+    if tool_name == "MultiEdit" {
+        if let Some(edits_value) = tool_input.get("edits") {
+            if let Some(edits_array) = edits_value.as_array() {
+                for edit in edits_array {
+                    if let Some(file_path) = edit.get("file_path").and_then(|v| v.as_str()) {
+                        if file_path.ends_with(".rs") {
+                            rust_files.push(PathBuf::from(file_path));
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Handle Edit and Write tools - has file_path
+        if let Some(file_path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
+            if file_path.ends_with(".rs") {
+                rust_files.push(PathBuf::from(file_path));
+            }
+        }
+    }
+
+    // If no Rust files, skip
+    if rust_files.is_empty() {
+        return Ok(None);
+    }
+
+    // Find all cargo roots and deduplicate
+    let mut processed_roots = HashSet::new();
+    let mut accumulated_output = String::new();
+    let mut any_failed = false;
+
+    for file_path in rust_files {
+        let cargo_root = find_cargo_root(&file_path)?;
+        let root_path = cargo_root.path().to_path_buf();
+
+        // Only run checks if we haven't processed this root yet
+        if processed_roots.insert(root_path) {
+            let result = run_all_checks(&cargo_root)?;
+            accumulated_output.push_str(&result.output);
+
+            if !result.success {
+                any_failed = true;
+            }
+        }
+    }
+
+    // If any checks failed, return a block response
+    if any_failed {
+        Ok(Some(HookResponse {
+            decision: DECISION_BLOCK.to_string(),
+            reason: "Rust compilation checks failed - code contains errors that must be fixed before proceeding".to_string(),
+            hook_specific_output: HookSpecificOutput {
+                hook_event_name: "PostToolUse".to_string(),
+                additional_context: truncate_output(accumulated_output),
+            },
+            system_message: Some("Cargo check found compilation errors - see details below".to_string()),
+        }))
+    } else {
+        // All checks passed - no need to output anything
+        Ok(None)
+    }
+}
+
+fn main() {
+    match run() {
+        Ok(Some(response)) => {
+            // Output JSON response to stdout
+            // Serialization should never fail for our simple types - if it does, it's a bug
+            let json = serde_json::to_string_pretty(&response)
+                .expect("Failed to serialize hook response - this is a bug");
+            println!("{}", json);
+            // Exit with 0 - the JSON decision field indicates the block
+            std::process::exit(0);
+        }
+        Ok(None) => {
+            // Success, no output needed
+            std::process::exit(0);
+        }
+        Err(e) => {
+            // Hook execution error (not cargo failure) - output as block with error
+            let response = HookResponse {
+                decision: DECISION_BLOCK.to_string(),
+                reason: format!("Cargo check hook error: {}", e),
+                hook_specific_output: HookSpecificOutput {
+                    hook_event_name: "PostToolUse".to_string(),
+                    additional_context: "The cargo check hook encountered an internal error. Please check your Rust project configuration.".to_string(),
+                },
+                system_message: Some("Cargo check hook encountered an error".to_string()),
+            };
+
+            // Serialization should never fail for our simple types - if it does, it's a bug
+            let json = serde_json::to_string_pretty(&response)
+                .expect("Failed to serialize error response - this is a bug");
+            println!("{}", json);
+            std::process::exit(0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_env_is_enabled_with_various_values() {
+        // Test "1"
+        std::env::set_var("TEST_VAR_1", "1");
+        assert!(env_is_enabled("TEST_VAR_1"));
+
+        // Test "true"
+        std::env::set_var("TEST_VAR_TRUE", "true");
+        assert!(env_is_enabled("TEST_VAR_TRUE"));
+
+        // Test "TRUE" (case insensitive)
+        std::env::set_var("TEST_VAR_TRUE_UPPER", "TRUE");
+        assert!(env_is_enabled("TEST_VAR_TRUE_UPPER"));
+
+        // Test "yes"
+        std::env::set_var("TEST_VAR_YES", "yes");
+        assert!(env_is_enabled("TEST_VAR_YES"));
+
+        // Test "on"
+        std::env::set_var("TEST_VAR_ON", "on");
+        assert!(env_is_enabled("TEST_VAR_ON"));
+
+        // Test "0" (should be false)
+        std::env::set_var("TEST_VAR_0", "0");
+        assert!(!env_is_enabled("TEST_VAR_0"));
+
+        // Test "false" (should be false)
+        std::env::set_var("TEST_VAR_FALSE", "false");
+        assert!(!env_is_enabled("TEST_VAR_FALSE"));
+
+        // Test unset variable
+        std::env::remove_var("TEST_VAR_UNSET");
+        assert!(!env_is_enabled("TEST_VAR_UNSET"));
+
+        // Clean up
+        std::env::remove_var("TEST_VAR_1");
+        std::env::remove_var("TEST_VAR_TRUE");
+        std::env::remove_var("TEST_VAR_TRUE_UPPER");
+        std::env::remove_var("TEST_VAR_YES");
+        std::env::remove_var("TEST_VAR_ON");
+        std::env::remove_var("TEST_VAR_0");
+        std::env::remove_var("TEST_VAR_FALSE");
+    }
+
+    #[test]
+    fn test_is_workspace_with_workspace_toml() {
+        // Use TempDir for automatic cleanup and unique paths (prevents race conditions)
+        let temp_dir = TempDir::new().unwrap();
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+
+        // Create a workspace Cargo.toml
+        let mut file = fs::File::create(&cargo_toml_path).unwrap();
+        writeln!(
+            file,
+            r#"
+[workspace]
+members = ["crate1", "crate2"]
+
+[workspace.package]
+version = "0.1.0"
+"#
+        )
+        .unwrap();
+
+        assert!(is_workspace(&cargo_toml_path));
+
+        // TempDir automatically cleans up on drop
+    }
+
+    #[test]
+    fn test_is_workspace_with_package_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+
+        // Create a package Cargo.toml (no workspace section)
+        let mut file = fs::File::create(&cargo_toml_path).unwrap();
+        writeln!(
+            file,
+            r#"
+[package]
+name = "my-package"
+version = "0.1.0"
+
+[dependencies]
+"#
+        )
+        .unwrap();
+
+        assert!(!is_workspace(&cargo_toml_path));
+    }
+
+    #[test]
+    fn test_is_workspace_with_invalid_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+
+        // Create an invalid TOML file
+        let mut file = fs::File::create(&cargo_toml_path).unwrap();
+        writeln!(file, "this is not valid TOML [[[").unwrap();
+
+        assert!(!is_workspace(&cargo_toml_path));
+    }
+
+    #[test]
+    fn test_is_workspace_with_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let nonexistent_path = temp_dir.path().join("nonexistent_cargo.toml");
+        assert!(!is_workspace(&nonexistent_path));
+    }
+
+    #[test]
+    fn test_find_cargo_root_package() {
+        // Create a temporary directory structure:
+        // temp_dir/
+        //   Cargo.toml (package)
+        //   src/
+        //     main.rs
+        let temp_dir = TempDir::new().unwrap();
+        let src_dir = temp_dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
+        let mut file = fs::File::create(&cargo_toml_path).unwrap();
+        writeln!(
+            file,
+            r#"
+[package]
+name = "test-package"
+version = "0.1.0"
+"#
+        )
+        .unwrap();
+
+        let main_rs_path = src_dir.join("main.rs");
+        fs::File::create(&main_rs_path).unwrap();
+
+        // Test finding the cargo root from main.rs
+        let result = find_cargo_root(&main_rs_path);
+        assert!(result.is_ok());
+
+        let cargo_root = result.unwrap();
+        assert_eq!(cargo_root.kind(), "package");
+        assert_eq!(cargo_root.path(), temp_dir.path());
+    }
+
+    #[test]
+    fn test_find_cargo_root_workspace() {
+        // Create a temporary directory structure:
+        // temp_dir/
+        //   Cargo.toml (workspace)
+        //   crate1/
+        //     Cargo.toml (package)
+        //     src/
+        //       lib.rs
+        let temp_dir = TempDir::new().unwrap();
+        let crate1_dir = temp_dir.path().join("crate1");
+        let src_dir = crate1_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // Create workspace Cargo.toml
+        let workspace_cargo_toml = temp_dir.path().join("Cargo.toml");
+        let mut file = fs::File::create(&workspace_cargo_toml).unwrap();
+        writeln!(
+            file,
+            r#"
+[workspace]
+members = ["crate1"]
+"#
+        )
+        .unwrap();
+
+        // Create package Cargo.toml
+        let package_cargo_toml = crate1_dir.join("Cargo.toml");
+        let mut file = fs::File::create(&package_cargo_toml).unwrap();
+        writeln!(
+            file,
+            r#"
+[package]
+name = "crate1"
+version = "0.1.0"
+"#
+        )
+        .unwrap();
+
+        let lib_rs_path = src_dir.join("lib.rs");
+        fs::File::create(&lib_rs_path).unwrap();
+
+        // Test finding the cargo root from lib.rs
+        // It should find the workspace root, not the package root
+        let result = find_cargo_root(&lib_rs_path);
+        assert!(result.is_ok());
+
+        let cargo_root = result.unwrap();
+        assert_eq!(cargo_root.kind(), "workspace");
+        assert_eq!(cargo_root.path(), temp_dir.path());
+    }
+
+    #[test]
+    fn test_find_cargo_root_relative_path_at_workspace_root() {
+        // Regression test for empty path bug when using relative paths
+        // This tests the case where a relative path walks up to the workspace root
+        let temp_dir = TempDir::new().unwrap();
+        let crate1_dir = temp_dir.path().join("crate1");
+        let src_dir = crate1_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // Create workspace Cargo.toml in temp_dir
+        let workspace_cargo = temp_dir.path().join("Cargo.toml");
+        let mut file = fs::File::create(&workspace_cargo).unwrap();
+        writeln!(file, "[workspace]\nmembers = [\"crate1\"]").unwrap();
+
+        // Create package Cargo.toml in crate1
+        let package_cargo = crate1_dir.join("Cargo.toml");
+        let mut file = fs::File::create(&package_cargo).unwrap();
+        writeln!(file, "[package]\nname = \"crate1\"\nversion = \"0.1.0\"").unwrap();
+
+        let lib_rs = src_dir.join("lib.rs");
+        fs::File::create(&lib_rs).unwrap();
+
+        // Change to temp_dir and use a relative path
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Use relative path from workspace root
+        let relative_path = PathBuf::from("crate1/src/lib.rs");
+        let result = find_cargo_root(&relative_path);
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let cargo_root = result.unwrap();
+
+        // Should find workspace root
+        assert_eq!(cargo_root.kind(), "workspace");
+
+        // The path should be "." not empty string
+        let path = cargo_root.path();
+        assert!(!path.as_os_str().is_empty(), "Path should not be empty");
+        assert!(path == PathBuf::from(".") || path.is_absolute());
+    }
+
+    #[test]
+    fn test_find_cargo_root_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let src_dir = temp_dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let main_rs_path = src_dir.join("main.rs");
+        fs::File::create(&main_rs_path).unwrap();
+
+        // Test finding cargo root when no Cargo.toml exists
+        let result = find_cargo_root(&main_rs_path);
+        assert!(result.is_err());
+
+        if let Err(e) = result {
+            match e {
+                CargoCheckError::CargoTomlNotFound { path } => {
+                    assert_eq!(path, main_rs_path);
+                }
+                _ => panic!("Expected CargoTomlNotFound error"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_multiedit_tool_handling() {
+        // Test that MultiEdit tool input is parsed correctly
+        // This tests the code path in lines 385-397
+
+        // Create a sample MultiEdit JSON input
+        let multiedit_json = r#"{
+            "session_id": "test",
+            "tool_name": "MultiEdit",
+            "tool_input": {
+                "edits": [
+                    {
+                        "file_path": "src/main.rs",
+                        "old_string": "foo",
+                        "new_string": "bar"
+                    },
+                    {
+                        "file_path": "src/lib.rs",
+                        "old_string": "baz",
+                        "new_string": "qux"
+                    },
+                    {
+                        "file_path": "README.md",
+                        "old_string": "old",
+                        "new_string": "new"
+                    }
+                ]
+            }
+        }"#;
+
+        let input: HookInput = serde_json::from_str(multiedit_json).unwrap();
+
+        // Verify tool_name is MultiEdit
+        assert_eq!(input.tool_name.as_ref().unwrap(), "MultiEdit");
+
+        // Extract edits array and verify we can parse it
+        let tool_input = input.tool_input.unwrap();
+        let edits_value = tool_input.get("edits").unwrap();
+        let edits_array = edits_value.as_array().unwrap();
+
+        // Count Rust files in the edits
+        let mut rust_file_count = 0;
+        for edit in edits_array {
+            if let Some(file_path) = edit.get("file_path").and_then(|v| v.as_str()) {
+                if file_path.ends_with(".rs") {
+                    rust_file_count += 1;
+                }
+            }
+        }
+
+        // Should find 2 Rust files (main.rs and lib.rs) but not README.md
+        assert_eq!(rust_file_count, 2);
+    }
+}

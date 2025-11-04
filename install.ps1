@@ -110,7 +110,8 @@ Write-Host "📦 Installing binaries to $binDir..."
 
 $coreBinaries = @(
     "target\release\skill-activation-prompt.exe",
-    "target\release\file-analyzer.exe"
+    "target\release\file-analyzer.exe",
+    "target\release\cargo-check.exe"
 )
 
 foreach ($binary in $coreBinaries) {
