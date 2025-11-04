@@ -1,7 +1,6 @@
 // Cargo check hook - automatically runs cargo check when editing Rust files
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-
 use std::env;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -155,6 +154,11 @@ fn run_cargo_command(
         } else {
             cmd.arg("--workspace");
         }
+    }
+
+    // Add -q flag in quiet mode to suppress cargo's progress messages
+    if quiet && command != "fmt" {
+        cmd.arg("-q");
     }
 
     // Add additional args
