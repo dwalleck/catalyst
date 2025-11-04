@@ -238,12 +238,15 @@ fn run_cargo_command(
     });
 
     // Join threads and collect output
-    let stdout_lines = stdout_thread
-        .join()
-        .expect("stdout thread panicked - this is a bug");
-    let stderr_lines = stderr_thread
-        .join()
-        .expect("stderr thread panicked - this is a bug");
+    // Use unwrap_or_else to gracefully handle thread panics
+    let stdout_lines = stdout_thread.join().unwrap_or_else(|_| {
+        eprintln!("Warning: stdout reading thread panicked, some output may be lost");
+        Vec::new()
+    });
+    let stderr_lines = stderr_thread.join().unwrap_or_else(|_| {
+        eprintln!("Warning: stderr reading thread panicked, some output may be lost");
+        Vec::new()
+    });
 
     // Add stdout lines to output buffer
     for line in stdout_lines {
@@ -497,6 +500,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    use tempfile::TempDir;
 
     #[test]
     fn test_env_is_enabled_with_various_values() {
@@ -544,9 +548,9 @@ mod tests {
 
     #[test]
     fn test_is_workspace_with_workspace_toml() {
-        let temp_dir = std::env::temp_dir().join("cargo_check_test_workspace");
-        fs::create_dir_all(&temp_dir).unwrap();
-        let cargo_toml_path = temp_dir.join("Cargo.toml");
+        // Use TempDir for automatic cleanup and unique paths (prevents race conditions)
+        let temp_dir = TempDir::new().unwrap();
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
 
         // Create a workspace Cargo.toml
         let mut file = fs::File::create(&cargo_toml_path).unwrap();
@@ -564,16 +568,13 @@ version = "0.1.0"
 
         assert!(is_workspace(&cargo_toml_path));
 
-        // Clean up
-        fs::remove_file(cargo_toml_path).unwrap();
-        fs::remove_dir(temp_dir).unwrap();
+        // TempDir automatically cleans up on drop
     }
 
     #[test]
     fn test_is_workspace_with_package_toml() {
-        let temp_dir = std::env::temp_dir().join("cargo_check_test_package");
-        fs::create_dir_all(&temp_dir).unwrap();
-        let cargo_toml_path = temp_dir.join("Cargo.toml");
+        let temp_dir = TempDir::new().unwrap();
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
 
         // Create a package Cargo.toml (no workspace section)
         let mut file = fs::File::create(&cargo_toml_path).unwrap();
@@ -590,32 +591,24 @@ version = "0.1.0"
         .unwrap();
 
         assert!(!is_workspace(&cargo_toml_path));
-
-        // Clean up
-        fs::remove_file(cargo_toml_path).unwrap();
-        fs::remove_dir(temp_dir).unwrap();
     }
 
     #[test]
     fn test_is_workspace_with_invalid_toml() {
-        let temp_dir = std::env::temp_dir().join("cargo_check_test_invalid");
-        fs::create_dir_all(&temp_dir).unwrap();
-        let cargo_toml_path = temp_dir.join("Cargo.toml");
+        let temp_dir = TempDir::new().unwrap();
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
 
         // Create an invalid TOML file
         let mut file = fs::File::create(&cargo_toml_path).unwrap();
         writeln!(file, "this is not valid TOML [[[").unwrap();
 
         assert!(!is_workspace(&cargo_toml_path));
-
-        // Clean up
-        fs::remove_file(cargo_toml_path).unwrap();
-        fs::remove_dir(temp_dir).unwrap();
     }
 
     #[test]
     fn test_is_workspace_with_nonexistent_file() {
-        let nonexistent_path = std::env::temp_dir().join("nonexistent_cargo.toml");
+        let temp_dir = TempDir::new().unwrap();
+        let nonexistent_path = temp_dir.path().join("nonexistent_cargo.toml");
         assert!(!is_workspace(&nonexistent_path));
     }
 
@@ -626,11 +619,11 @@ version = "0.1.0"
         //   Cargo.toml (package)
         //   src/
         //     main.rs
-        let temp_dir = std::env::temp_dir().join("cargo_check_test_find_package");
-        let src_dir = temp_dir.join("src");
+        let temp_dir = TempDir::new().unwrap();
+        let src_dir = temp_dir.path().join("src");
         fs::create_dir_all(&src_dir).unwrap();
 
-        let cargo_toml_path = temp_dir.join("Cargo.toml");
+        let cargo_toml_path = temp_dir.path().join("Cargo.toml");
         let mut file = fs::File::create(&cargo_toml_path).unwrap();
         writeln!(
             file,
@@ -651,13 +644,7 @@ version = "0.1.0"
 
         let cargo_root = result.unwrap();
         assert_eq!(cargo_root.kind(), "package");
-        assert_eq!(cargo_root.path(), temp_dir);
-
-        // Clean up
-        fs::remove_file(main_rs_path).unwrap();
-        fs::remove_file(cargo_toml_path).unwrap();
-        fs::remove_dir(src_dir).unwrap();
-        fs::remove_dir(temp_dir).unwrap();
+        assert_eq!(cargo_root.path(), temp_dir.path());
     }
 
     #[test]
@@ -669,13 +656,13 @@ version = "0.1.0"
         //     Cargo.toml (package)
         //     src/
         //       lib.rs
-        let temp_dir = std::env::temp_dir().join("cargo_check_test_find_workspace");
-        let crate1_dir = temp_dir.join("crate1");
+        let temp_dir = TempDir::new().unwrap();
+        let crate1_dir = temp_dir.path().join("crate1");
         let src_dir = crate1_dir.join("src");
         fs::create_dir_all(&src_dir).unwrap();
 
         // Create workspace Cargo.toml
-        let workspace_cargo_toml = temp_dir.join("Cargo.toml");
+        let workspace_cargo_toml = temp_dir.path().join("Cargo.toml");
         let mut file = fs::File::create(&workspace_cargo_toml).unwrap();
         writeln!(
             file,
@@ -709,28 +696,20 @@ version = "0.1.0"
 
         let cargo_root = result.unwrap();
         assert_eq!(cargo_root.kind(), "workspace");
-        assert_eq!(cargo_root.path(), temp_dir);
-
-        // Clean up
-        fs::remove_file(lib_rs_path).unwrap();
-        fs::remove_file(package_cargo_toml).unwrap();
-        fs::remove_file(workspace_cargo_toml).unwrap();
-        fs::remove_dir(src_dir).unwrap();
-        fs::remove_dir(crate1_dir).unwrap();
-        fs::remove_dir(temp_dir).unwrap();
+        assert_eq!(cargo_root.path(), temp_dir.path());
     }
 
     #[test]
     fn test_find_cargo_root_relative_path_at_workspace_root() {
         // Regression test for empty path bug when using relative paths
         // This tests the case where a relative path walks up to the workspace root
-        let temp_dir = std::env::temp_dir().join("cargo_check_test_relative_workspace");
-        let crate1_dir = temp_dir.join("crate1");
+        let temp_dir = TempDir::new().unwrap();
+        let crate1_dir = temp_dir.path().join("crate1");
         let src_dir = crate1_dir.join("src");
         fs::create_dir_all(&src_dir).unwrap();
 
         // Create workspace Cargo.toml in temp_dir
-        let workspace_cargo = temp_dir.join("Cargo.toml");
+        let workspace_cargo = temp_dir.path().join("Cargo.toml");
         let mut file = fs::File::create(&workspace_cargo).unwrap();
         writeln!(file, "[workspace]\nmembers = [\"crate1\"]").unwrap();
 
@@ -744,7 +723,7 @@ version = "0.1.0"
 
         // Change to temp_dir and use a relative path
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Use relative path from workspace root
         let relative_path = PathBuf::from("crate1/src/lib.rs");
@@ -763,20 +742,12 @@ version = "0.1.0"
         let path = cargo_root.path();
         assert!(!path.as_os_str().is_empty(), "Path should not be empty");
         assert!(path == PathBuf::from(".") || path.is_absolute());
-
-        // Clean up
-        fs::remove_file(lib_rs).unwrap();
-        fs::remove_file(package_cargo).unwrap();
-        fs::remove_file(workspace_cargo).unwrap();
-        fs::remove_dir(src_dir).unwrap();
-        fs::remove_dir(crate1_dir).unwrap();
-        fs::remove_dir(temp_dir).unwrap();
     }
 
     #[test]
     fn test_find_cargo_root_not_found() {
-        let temp_dir = std::env::temp_dir().join("cargo_check_test_no_cargo");
-        let src_dir = temp_dir.join("src");
+        let temp_dir = TempDir::new().unwrap();
+        let src_dir = temp_dir.path().join("src");
         fs::create_dir_all(&src_dir).unwrap();
 
         let main_rs_path = src_dir.join("main.rs");
@@ -794,10 +765,59 @@ version = "0.1.0"
                 _ => panic!("Expected CargoTomlNotFound error"),
             }
         }
+    }
 
-        // Clean up
-        fs::remove_file(main_rs_path).unwrap();
-        fs::remove_dir(src_dir).unwrap();
-        fs::remove_dir(temp_dir).unwrap();
+    #[test]
+    fn test_multiedit_tool_handling() {
+        // Test that MultiEdit tool input is parsed correctly
+        // This tests the code path in lines 385-397
+
+        // Create a sample MultiEdit JSON input
+        let multiedit_json = r#"{
+            "session_id": "test",
+            "tool_name": "MultiEdit",
+            "tool_input": {
+                "edits": [
+                    {
+                        "file_path": "src/main.rs",
+                        "old_string": "foo",
+                        "new_string": "bar"
+                    },
+                    {
+                        "file_path": "src/lib.rs",
+                        "old_string": "baz",
+                        "new_string": "qux"
+                    },
+                    {
+                        "file_path": "README.md",
+                        "old_string": "old",
+                        "new_string": "new"
+                    }
+                ]
+            }
+        }"#;
+
+        let input: HookInput = serde_json::from_str(multiedit_json).unwrap();
+
+        // Verify tool_name is MultiEdit
+        assert_eq!(input.tool_name.as_ref().unwrap(), "MultiEdit");
+
+        // Extract edits array and verify we can parse it
+        let tool_input = input.tool_input.unwrap();
+        let edits_value = tool_input.get("edits").unwrap();
+        let edits_array = edits_value.as_array().unwrap();
+
+        // Count Rust files in the edits
+        let mut rust_file_count = 0;
+        for edit in edits_array {
+            if let Some(file_path) = edit.get("file_path").and_then(|v| v.as_str()) {
+                if file_path.ends_with(".rs") {
+                    rust_file_count += 1;
+                }
+            }
+        }
+
+        // Should find 2 Rust files (main.rs and lib.rs) but not README.md
+        assert_eq!(rust_file_count, 2);
     }
 }

@@ -9,7 +9,7 @@
 #   $env:CARGO_CHECK_CLIPPY="true"    - Also run clippy with -D warnings
 #   $env:CARGO_CHECK_TESTS="yes"      - Also check test compilation (--no-run)
 #   $env:CARGO_CHECK_FMT="on"         - Also check formatting (--check)
-#   $env:CARGO_CHECK_QUIET="false"    - Show all output (default: true for silent mode)
+#   $env:CARGO_CHECK_QUIET="true"     - Enable quiet mode (default: false shows all output)
 #
 # Example settings.json configuration:
 #   "PostToolUse": [
@@ -26,10 +26,10 @@
 # Ensure cargo is in PATH
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 
-# Run in quiet mode by default (only show output on errors)
-# Set $env:CARGO_CHECK_QUIET="0" to see all output
+# Show all output by default for visibility
+# Set $env:CARGO_CHECK_QUIET="true" to enable quiet mode
 if (-not $env:CARGO_CHECK_QUIET) {
-    $env:CARGO_CHECK_QUIET = "true"
+    $env:CARGO_CHECK_QUIET = "false"
 }
 
 # Check if cargo-check binary exists

@@ -49,6 +49,8 @@ chrono = { workspace = true, optional = true }
 [dev-dependencies]
 # Pre-commit hooks (installs automatically on cargo build)
 cargo-husky = { workspace = true }
+# Temporary directories for testing (prevents race conditions)
+tempfile = "3.14"
 
 [features]
 default = []

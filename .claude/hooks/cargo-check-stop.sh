@@ -10,7 +10,7 @@
 #   CARGO_CHECK_CLIPPY=true    - Also run clippy with -D warnings
 #   CARGO_CHECK_TESTS=yes      - Also check test compilation (--no-run)
 #   CARGO_CHECK_FMT=on         - Also check formatting (--check)
-#   CARGO_CHECK_QUIET=false    - Show all output (default: true for silent mode)
+#   CARGO_CHECK_QUIET=true     - Enable quiet mode (default: false shows all output)
 #
 # Example settings.json configuration:
 #   "PostToolUse": [
@@ -27,14 +27,15 @@
 # Ensure cargo is in PATH
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# IMPORTANT: Claude Code does NOT display hook stderr in the UI
-# This means quiet mode hides ALL output including errors!
-# Running with quiet=false so cargo output goes to logs
-# Set CARGO_CHECK_QUIET=true to enable quiet mode (but you won't see errors!)
+# Show all output by default for visibility
+# JSON output ensures Claude sees errors even in quiet mode
+# Set CARGO_CHECK_QUIET=true to reduce output (errors still shown via JSON)
 export CARGO_CHECK_QUIET="${CARGO_CHECK_QUIET:-false}"
 
-# Log hook execution for debugging (optional - comment out when not needed)
-echo "$(date '+%Y-%m-%d %H:%M:%S') - cargo-check hook executed" >> /tmp/cargo-check.log
+# Debug logging (opt-in via CARGO_CHECK_DEBUG=true)
+if [ "${CARGO_CHECK_DEBUG:-false}" = "true" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - cargo-check hook executed" >> /tmp/cargo-check.log
+fi
 
 # Check if cargo-check binary exists
 CARGO_CHECK_BIN="$HOME/.claude-hooks/bin/cargo-check"
