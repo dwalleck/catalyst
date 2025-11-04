@@ -250,12 +250,12 @@ fn run_cargo_command(
 
     // Add stdout lines to output buffer
     for line in stdout_lines {
-        writeln!(output_buffer, "{}", line).unwrap();
+        let _ = writeln!(output_buffer, "{}", line);
     }
 
     // Add stderr lines to output buffer (always included, even in quiet mode)
     for line in stderr_lines {
-        writeln!(output_buffer, "{}", line).unwrap();
+        let _ = writeln!(output_buffer, "{}", line);
     }
 
     // Wait for the command to complete
@@ -269,15 +269,14 @@ fn run_cargo_command(
 
     if !status.success() {
         // Add failure summary to output
-        writeln!(output_buffer).unwrap();
-        writeln!(output_buffer, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").unwrap();
-        writeln!(
+        let _ = writeln!(output_buffer);
+        let _ = writeln!(output_buffer, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        let _ = writeln!(
             output_buffer,
             "❌ Cargo {} failed with exit code {}",
             command, exit_code
-        )
-        .unwrap();
-        writeln!(output_buffer, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").unwrap();
+        );
+        let _ = writeln!(output_buffer, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         return Ok(CommandResult {
             success: false,
@@ -287,7 +286,7 @@ fn run_cargo_command(
     }
 
     if !quiet {
-        writeln!(output_buffer, "{}", success_msg).unwrap();
+        let _ = writeln!(output_buffer, "{}", success_msg);
     }
 
     Ok(CommandResult {
@@ -302,14 +301,15 @@ fn run_cargo_command(
 fn run_all_checks(cargo_root: &CargoRoot) -> Result<CommandResult, CargoCheckError> {
     let mut accumulated_output = String::new();
     let mut all_success = true;
-    let mut final_exit_code = 0;
+    // Track exit code of first failure (if any) for error reporting
+    let mut first_failure_exit_code = 0;
 
     // Always run cargo check
     let result = run_cargo_command(cargo_root, "check", &[], "🦀", "✅ Cargo check passed")?;
     accumulated_output.push_str(&result.output);
     if !result.success {
         all_success = false;
-        final_exit_code = result.exit_code;
+        first_failure_exit_code = result.exit_code;
     }
 
     // Optional: Run clippy if CARGO_CHECK_CLIPPY is enabled
@@ -324,7 +324,10 @@ fn run_all_checks(cargo_root: &CargoRoot) -> Result<CommandResult, CargoCheckErr
         accumulated_output.push_str(&result.output);
         if !result.success {
             all_success = false;
-            final_exit_code = result.exit_code;
+            // Only set if not already set (preserve first failure)
+            if first_failure_exit_code == 0 {
+                first_failure_exit_code = result.exit_code;
+            }
         }
     }
 
@@ -340,7 +343,10 @@ fn run_all_checks(cargo_root: &CargoRoot) -> Result<CommandResult, CargoCheckErr
         accumulated_output.push_str(&result.output);
         if !result.success {
             all_success = false;
-            final_exit_code = result.exit_code;
+            // Only set if not already set (preserve first failure)
+            if first_failure_exit_code == 0 {
+                first_failure_exit_code = result.exit_code;
+            }
         }
     }
 
@@ -356,14 +362,17 @@ fn run_all_checks(cargo_root: &CargoRoot) -> Result<CommandResult, CargoCheckErr
         accumulated_output.push_str(&result.output);
         if !result.success {
             all_success = false;
-            final_exit_code = result.exit_code;
+            // Only set if not already set (preserve first failure)
+            if first_failure_exit_code == 0 {
+                first_failure_exit_code = result.exit_code;
+            }
         }
     }
 
     Ok(CommandResult {
         success: all_success,
         output: accumulated_output,
-        exit_code: final_exit_code,
+        exit_code: first_failure_exit_code,
     })
 }
 
