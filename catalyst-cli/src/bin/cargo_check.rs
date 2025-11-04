@@ -2,7 +2,7 @@
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use thiserror::Error;
@@ -156,7 +156,8 @@ fn run_cargo_command(
         }
     }
 
-    // Add -q flag in quiet mode to suppress cargo's progress messages
+    // In quiet mode, use -q to suppress "Checking..." messages
+    // Cargo will still output errors even with -q
     if quiet && command != "fmt" {
         cmd.arg("-q");
     }
@@ -169,19 +170,44 @@ fn run_cargo_command(
     // Set working directory
     cmd.current_dir(cargo_root.path());
 
-    // Inherit stdout and stderr for proper interleaving
-    // This ensures output appears in real-time in the correct order
-    cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    // Capture stdout and stderr so we can explicitly write to our stderr
+    // This ensures Claude Code sees the output
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    // Run the command and wait for it to complete
-    let status = cmd.status().map_err(CargoCheckError::CargoExecution)?;
+    // Spawn the command
+    let mut child = cmd.spawn().map_err(CargoCheckError::CargoExecution)?;
+
+    // Capture output streams
+    let stdout = child.stdout.take().expect("Failed to capture stdout");
+    let stderr = child.stderr.take().expect("Failed to capture stderr");
+
+    // Read and immediately write to stderr so Claude can see it
+    let stdout_reader = BufReader::new(stdout);
+    let stderr_reader = BufReader::new(stderr);
+
+    // Process stdout
+    for line in stdout_reader.lines().map_while(Result::ok) {
+        if !quiet || line.contains("error") || line.contains("warning") {
+            eprintln!("{}", line);
+        }
+    }
+
+    // Process stderr (always show, even in quiet mode)
+    for line in stderr_reader.lines().map_while(Result::ok) {
+        eprintln!("{}", line);
+    }
+
+    // Wait for the command to complete
+    let status = child.wait().map_err(CargoCheckError::CargoExecution)?;
 
     if !status.success() {
         let code = status.code().unwrap_or(101);
-        if !quiet {
-            eprintln!();
-            eprintln!("❌ {} failed!", command);
-        }
+        // Output failure summary to stderr (visible to Claude)
+        eprintln!();
+        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        eprintln!("❌ Cargo {} failed with exit code {}", command, code);
+        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        eprintln!();
         return Err(CargoCheckError::CargoCheckFailed { code });
     }
 
@@ -306,7 +332,25 @@ fn run() -> Result<(), CargoCheckError> {
 fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {}", e);
-        std::process::exit(1);
+
+        // Log error to file for debugging
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/cargo-check-errors.log")
+        {
+            use std::io::Write;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let _ = writeln!(file, "\n[{}] Cargo check failed:", timestamp);
+            let _ = writeln!(file, "{}", e);
+        }
+
+        // Exit code 2 tells Claude Code to show stderr to the AI model immediately!
+        // This allows the AI to see and fix compilation errors
+        std::process::exit(2);
     }
 }
 

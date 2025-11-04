@@ -27,9 +27,14 @@
 # Ensure cargo is in PATH
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# Run in quiet mode by default (only show output on errors)
-# Set CARGO_CHECK_QUIET=0 to see all output
-export CARGO_CHECK_QUIET="${CARGO_CHECK_QUIET:-true}"
+# IMPORTANT: Claude Code does NOT display hook stderr in the UI
+# This means quiet mode hides ALL output including errors!
+# Running with quiet=false so cargo output goes to logs
+# Set CARGO_CHECK_QUIET=true to enable quiet mode (but you won't see errors!)
+export CARGO_CHECK_QUIET="${CARGO_CHECK_QUIET:-false}"
+
+# Log hook execution for debugging (optional - comment out when not needed)
+echo "$(date '+%Y-%m-%d %H:%M:%S') - cargo-check hook executed" >> /tmp/cargo-check.log
 
 # Run cargo-check and explicitly exit with its exit code
 cat | ~/.claude-hooks/bin/cargo-check
