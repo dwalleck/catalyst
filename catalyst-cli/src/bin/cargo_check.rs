@@ -177,9 +177,17 @@ fn run_cargo_command(
     // Spawn the command
     let mut child = cmd.spawn().map_err(CargoCheckError::CargoExecution)?;
 
-    // Capture output streams
-    let stdout = child.stdout.take().expect("Failed to capture stdout");
-    let stderr = child.stderr.take().expect("Failed to capture stderr");
+    // Capture output streams (these should always be Some since we set Stdio::piped)
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "Failed to capture stdout"))
+        .map_err(CargoCheckError::CargoExecution)?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "Failed to capture stderr"))
+        .map_err(CargoCheckError::CargoExecution)?;
 
     // Read and immediately write to stderr so Claude can see it
     let stdout_reader = BufReader::new(stdout);
@@ -332,21 +340,6 @@ fn run() -> Result<(), CargoCheckError> {
 fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {}", e);
-
-        // Log error to file for debugging
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/cargo-check-errors.log")
-        {
-            use std::io::Write;
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            let _ = writeln!(file, "\n[{}] Cargo check failed:", timestamp);
-            let _ = writeln!(file, "{}", e);
-        }
 
         // Exit code 2 tells Claude Code to show stderr to the AI model immediately!
         // This allows the AI to see and fix compilation errors
