@@ -3,10 +3,10 @@
 # This hook automatically runs cargo check when you edit Rust files.
 # It finds the workspace or package root and runs the appropriate command.
 #
-# Optional environment variables:
-#   $env:CARGO_CHECK_CLIPPY=1    - Also run clippy with -D warnings
-#   $env:CARGO_CHECK_TESTS=1     - Also check test compilation (--no-run)
-#   $env:CARGO_CHECK_FMT=1       - Also check formatting (--check)
+# Optional environment variables (accepts: 1, true, yes, on):
+#   $env:CARGO_CHECK_CLIPPY="true"    - Also run clippy with -D warnings
+#   $env:CARGO_CHECK_TESTS="yes"      - Also check test compilation (--no-run)
+#   $env:CARGO_CHECK_FMT="on"         - Also check formatting (--check)
 #
 # Example settings.json configuration:
 #   "Stop": [

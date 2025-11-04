@@ -107,18 +107,20 @@ Add to your project's `.claude/settings.json`:
 
 ## Optional Checks
 
-Enable additional checks via environment variables:
+Enable additional checks via environment variables.
+
+**Accepted values:** `1`, `true`, `yes`, `on` (case-insensitive)
 
 ### Clippy (Linting)
 
 **Linux / macOS:**
 ```bash
-export CARGO_CHECK_CLIPPY=1
+export CARGO_CHECK_CLIPPY=true   # or 1, yes, on
 ```
 
 **Windows:**
 ```powershell
-$env:CARGO_CHECK_CLIPPY = "1"
+$env:CARGO_CHECK_CLIPPY = "true"   # or 1, yes, on
 ```
 
 Runs: `cargo clippy --workspace -- -D warnings`
@@ -127,12 +129,12 @@ Runs: `cargo clippy --workspace -- -D warnings`
 
 **Linux / macOS:**
 ```bash
-export CARGO_CHECK_TESTS=1
+export CARGO_CHECK_TESTS=yes   # or 1, true, on
 ```
 
 **Windows:**
 ```powershell
-$env:CARGO_CHECK_TESTS = "1"
+$env:CARGO_CHECK_TESTS = "yes"   # or 1, true, on
 ```
 
 Runs: `cargo test --workspace --no-run`
@@ -141,12 +143,12 @@ Runs: `cargo test --workspace --no-run`
 
 **Linux / macOS:**
 ```bash
-export CARGO_CHECK_FMT=1
+export CARGO_CHECK_FMT=on   # or 1, true, yes
 ```
 
 **Windows:**
 ```powershell
-$env:CARGO_CHECK_FMT = "1"
+$env:CARGO_CHECK_FMT = "on"   # or 1, true, yes
 ```
 
 Runs: `cargo fmt --all -- --check`
@@ -155,16 +157,16 @@ Runs: `cargo fmt --all -- --check`
 
 **Linux / macOS:**
 ```bash
-export CARGO_CHECK_CLIPPY=1
-export CARGO_CHECK_TESTS=1
-export CARGO_CHECK_FMT=1
+export CARGO_CHECK_CLIPPY=true
+export CARGO_CHECK_TESTS=true
+export CARGO_CHECK_FMT=true
 ```
 
 **Windows:**
 ```powershell
-$env:CARGO_CHECK_CLIPPY = "1"
-$env:CARGO_CHECK_TESTS = "1"
-$env:CARGO_CHECK_FMT = "1"
+$env:CARGO_CHECK_CLIPPY = "true"
+$env:CARGO_CHECK_TESTS = "true"
+$env:CARGO_CHECK_FMT = "true"
 ```
 
 ---

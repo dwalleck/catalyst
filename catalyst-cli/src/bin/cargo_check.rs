@@ -1,10 +1,11 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use thiserror::Error;
+use toml::Value;
 
 #[derive(Error, Debug)]
 enum CargoCheckError {
@@ -53,6 +54,28 @@ impl CargoRoot {
     }
 }
 
+/// Checks if an environment variable is set to a truthy value
+/// Accepts: "1", "true", "yes", "on" (case-insensitive)
+fn env_is_enabled(var: &str) -> bool {
+    env::var(var)
+        .map(|v| {
+            let lower = v.to_lowercase();
+            matches!(lower.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+/// Checks if a Cargo.toml file defines a workspace using TOML parsing
+fn is_workspace(cargo_toml_path: &Path) -> bool {
+    if let Ok(content) = std::fs::read_to_string(cargo_toml_path) {
+        if let Ok(toml) = content.parse::<Value>() {
+            // Check if [workspace] section exists in the parsed TOML
+            return toml.get("workspace").is_some();
+        }
+    }
+    false
+}
+
 /// Finds the Cargo.toml root for a given file path
 /// Returns the workspace root if found, otherwise the first package root
 fn find_cargo_root(file_path: &Path) -> Result<CargoRoot, CargoCheckError> {
@@ -68,11 +91,9 @@ fn find_cargo_root(file_path: &Path) -> Result<CargoRoot, CargoCheckError> {
         let cargo_toml = current_dir.join("Cargo.toml");
 
         if cargo_toml.exists() {
-            // Check if this is a workspace
-            if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
-                if content.contains("[workspace]") {
-                    return Ok(CargoRoot::Workspace(current_dir.to_path_buf()));
-                }
+            // Check if this is a workspace using TOML parsing
+            if is_workspace(&cargo_toml) {
+                return Ok(CargoRoot::Workspace(current_dir.to_path_buf()));
             }
 
             // Remember the first package found
@@ -96,7 +117,7 @@ fn find_cargo_root(file_path: &Path) -> Result<CargoRoot, CargoCheckError> {
         })
 }
 
-/// Runs a cargo command and streams output to stderr
+/// Runs a cargo command with inherited stdout/stderr for proper interleaving
 fn run_cargo_command(
     cargo_root: &CargoRoot,
     command: &str,
@@ -127,31 +148,12 @@ fn run_cargo_command(
     // Set working directory
     cmd.current_dir(cargo_root.path());
 
-    // Configure stdio
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Inherit stdout and stderr for proper interleaving
+    // This ensures output appears in real-time in the correct order
+    cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
-    // Spawn the process
-    let mut child = cmd.spawn().map_err(CargoCheckError::CargoExecution)?;
-
-    // Stream stdout and stderr
-    let stdout = child.stdout.take().expect("Failed to capture stdout");
-    let stderr = child.stderr.take().expect("Failed to capture stderr");
-
-    let stdout_reader = BufReader::new(stdout);
-    let stderr_reader = BufReader::new(stderr);
-
-    // Print stdout lines
-    for line in stdout_reader.lines().map_while(Result::ok) {
-        eprintln!("{}", line);
-    }
-
-    // Print stderr lines
-    for line in stderr_reader.lines().map_while(Result::ok) {
-        eprintln!("{}", line);
-    }
-
-    // Wait for process to complete
-    let status = child.wait().map_err(CargoCheckError::CargoExecution)?;
+    // Run the command and wait for it to complete
+    let status = cmd.status().map_err(CargoCheckError::CargoExecution)?;
 
     if !status.success() {
         let code = status.code().unwrap_or(-1);
@@ -169,8 +171,8 @@ fn run_all_checks(cargo_root: &CargoRoot) -> Result<(), CargoCheckError> {
     // Always run cargo check
     run_cargo_command(cargo_root, "check", &[], "🦀", "✅ Cargo check passed")?;
 
-    // Optional: Run clippy if CARGO_CHECK_CLIPPY=1
-    if env::var("CARGO_CHECK_CLIPPY").unwrap_or_default() == "1" {
+    // Optional: Run clippy if CARGO_CHECK_CLIPPY is enabled
+    if env_is_enabled("CARGO_CHECK_CLIPPY") {
         run_cargo_command(
             cargo_root,
             "clippy",
@@ -180,8 +182,8 @@ fn run_all_checks(cargo_root: &CargoRoot) -> Result<(), CargoCheckError> {
         )?;
     }
 
-    // Optional: Run tests (check only, don't execute) if CARGO_CHECK_TESTS=1
-    if env::var("CARGO_CHECK_TESTS").unwrap_or_default() == "1" {
+    // Optional: Run tests (check only, don't execute) if CARGO_CHECK_TESTS is enabled
+    if env_is_enabled("CARGO_CHECK_TESTS") {
         run_cargo_command(
             cargo_root,
             "test",
@@ -191,8 +193,8 @@ fn run_all_checks(cargo_root: &CargoRoot) -> Result<(), CargoCheckError> {
         )?;
     }
 
-    // Optional: Check formatting if CARGO_CHECK_FMT=1
-    if env::var("CARGO_CHECK_FMT").unwrap_or_default() == "1" {
+    // Optional: Check formatting if CARGO_CHECK_FMT is enabled
+    if env_is_enabled("CARGO_CHECK_FMT") {
         run_cargo_command(
             cargo_root,
             "fmt",

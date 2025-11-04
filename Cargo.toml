@@ -22,6 +22,7 @@ categories = ["development-tools", "command-line-utilities"]
 # Shared dependencies available to all workspace members
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"                 # TOML parsing for Cargo.toml detection
 regex = "1.10"
 anyhow = "1.0"
 thiserror = "1.0"            # Custom error types (Phase 3.2)
