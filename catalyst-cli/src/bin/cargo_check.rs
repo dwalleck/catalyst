@@ -1,5 +1,5 @@
 // Cargo check hook - automatically runs cargo check when editing Rust files
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io::{self, BufRead, BufReader, Read};
@@ -21,9 +21,6 @@ enum CargoCheckError {
 
     #[error("[CC004] Failed to execute cargo command: {0}")]
     CargoExecution(#[source] io::Error),
-
-    #[error("[CC005] Cargo check failed with exit code: {code}\nSee output above for details")]
-    CargoCheckFailed { code: i32 },
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +29,21 @@ struct HookInput {
     _session_id: String,
     tool_name: Option<String>,
     tool_input: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Serialize)]
+struct HookResponse {
+    decision: String,
+    reasoning: String,
+    #[serde(rename = "additionalContext")]
+    additional_context: String,
+}
+
+#[derive(Debug)]
+struct CommandResult {
+    success: bool,
+    output: String,
+    exit_code: i32,
 }
 
 #[derive(Debug)]
@@ -128,18 +140,25 @@ fn find_cargo_root(file_path: &Path) -> Result<CargoRoot, CargoCheckError> {
         })
 }
 
-/// Runs a cargo command with inherited stdout/stderr for proper interleaving
+/// Runs a cargo command and captures output
 fn run_cargo_command(
     cargo_root: &CargoRoot,
     command: &str,
     args: &[&str],
     emoji: &str,
     success_msg: &str,
-) -> Result<(), CargoCheckError> {
+) -> Result<CommandResult, CargoCheckError> {
     let quiet = env_is_enabled("CARGO_CHECK_QUIET");
+    let mut output_buffer = String::new();
 
     if !quiet {
-        eprintln!("{} Running {} on {}...", emoji, command, cargo_root.kind());
+        let msg = format!(
+            "{} Running {} on {}...\n",
+            emoji,
+            command,
+            cargo_root.kind()
+        );
+        output_buffer.push_str(&msg);
     }
 
     // Just use "cargo" - the wrapper script should ensure PATH is set correctly
@@ -170,14 +189,13 @@ fn run_cargo_command(
     // Set working directory
     cmd.current_dir(cargo_root.path());
 
-    // Capture stdout and stderr so we can explicitly write to our stderr
-    // This ensures Claude Code sees the output
+    // Capture stdout and stderr
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     // Spawn the command
     let mut child = cmd.spawn().map_err(CargoCheckError::CargoExecution)?;
 
-    // Capture output streams (these should always be Some since we set Stdio::piped)
+    // Capture output streams
     let stdout = child
         .stdout
         .take()
@@ -189,84 +207,128 @@ fn run_cargo_command(
         .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "Failed to capture stderr"))
         .map_err(CargoCheckError::CargoExecution)?;
 
-    // Read and immediately write to stderr so Claude can see it
+    // Capture output to buffer
     let stdout_reader = BufReader::new(stdout);
     let stderr_reader = BufReader::new(stderr);
 
     // Process stdout
     for line in stdout_reader.lines().map_while(Result::ok) {
         if !quiet || line.contains("error") || line.contains("warning") {
-            eprintln!("{}", line);
+            output_buffer.push_str(&line);
+            output_buffer.push('\n');
         }
     }
 
-    // Process stderr (always show, even in quiet mode)
+    // Process stderr (always capture, even in quiet mode)
     for line in stderr_reader.lines().map_while(Result::ok) {
-        eprintln!("{}", line);
+        output_buffer.push_str(&line);
+        output_buffer.push('\n');
     }
 
     // Wait for the command to complete
     let status = child.wait().map_err(CargoCheckError::CargoExecution)?;
+    let exit_code = status.code().unwrap_or(101);
 
     if !status.success() {
-        let code = status.code().unwrap_or(101);
-        // Output failure summary to stderr (visible to Claude)
-        eprintln!();
-        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        eprintln!("❌ Cargo {} failed with exit code {}", command, code);
-        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        eprintln!();
-        return Err(CargoCheckError::CargoCheckFailed { code });
+        // Add failure summary to output
+        output_buffer.push('\n');
+        output_buffer.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        output_buffer.push_str(&format!(
+            "❌ Cargo {} failed with exit code {}\n",
+            command, exit_code
+        ));
+        output_buffer.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+        return Ok(CommandResult {
+            success: false,
+            output: output_buffer,
+            exit_code,
+        });
     }
 
     if !quiet {
-        eprintln!("{}", success_msg);
+        output_buffer.push_str(success_msg);
+        output_buffer.push('\n');
     }
-    Ok(())
+
+    Ok(CommandResult {
+        success: true,
+        output: output_buffer,
+        exit_code: 0,
+    })
 }
 
 /// Runs cargo check and optional additional checks
-fn run_all_checks(cargo_root: &CargoRoot) -> Result<(), CargoCheckError> {
+/// Returns accumulated output and whether all checks passed
+fn run_all_checks(cargo_root: &CargoRoot) -> Result<CommandResult, CargoCheckError> {
+    let mut accumulated_output = String::new();
+    let mut all_success = true;
+    let mut final_exit_code = 0;
+
     // Always run cargo check
-    run_cargo_command(cargo_root, "check", &[], "🦀", "✅ Cargo check passed")?;
+    let result = run_cargo_command(cargo_root, "check", &[], "🦀", "✅ Cargo check passed")?;
+    accumulated_output.push_str(&result.output);
+    if !result.success {
+        all_success = false;
+        final_exit_code = result.exit_code;
+    }
 
     // Optional: Run clippy if CARGO_CHECK_CLIPPY is enabled
     if env_is_enabled("CARGO_CHECK_CLIPPY") {
-        run_cargo_command(
+        let result = run_cargo_command(
             cargo_root,
             "clippy",
             &["--", "-D", "warnings"],
             "📎",
             "✅ Clippy passed",
         )?;
+        accumulated_output.push_str(&result.output);
+        if !result.success {
+            all_success = false;
+            final_exit_code = result.exit_code;
+        }
     }
 
     // Optional: Run tests (check only, don't execute) if CARGO_CHECK_TESTS is enabled
     if env_is_enabled("CARGO_CHECK_TESTS") {
-        run_cargo_command(
+        let result = run_cargo_command(
             cargo_root,
             "test",
             &["--no-run"],
             "🧪",
             "✅ Test compilation passed",
         )?;
+        accumulated_output.push_str(&result.output);
+        if !result.success {
+            all_success = false;
+            final_exit_code = result.exit_code;
+        }
     }
 
     // Optional: Check formatting if CARGO_CHECK_FMT is enabled
     if env_is_enabled("CARGO_CHECK_FMT") {
-        run_cargo_command(
+        let result = run_cargo_command(
             cargo_root,
             "fmt",
             &["--", "--check"],
             "📝",
             "✅ Formatting check passed",
         )?;
+        accumulated_output.push_str(&result.output);
+        if !result.success {
+            all_success = false;
+            final_exit_code = result.exit_code;
+        }
     }
 
-    Ok(())
+    Ok(CommandResult {
+        success: all_success,
+        output: accumulated_output,
+        exit_code: final_exit_code,
+    })
 }
 
-fn run() -> Result<(), CargoCheckError> {
+fn run() -> Result<Option<HookResponse>, CargoCheckError> {
     // Read JSON input from stdin
     let mut buffer = String::new();
     io::stdin().read_to_string(&mut buffer)?;
@@ -278,17 +340,17 @@ fn run() -> Result<(), CargoCheckError> {
     // Check if this is a relevant tool (Edit, Write, MultiEdit)
     let tool_name = match input.tool_name {
         Some(name) => name,
-        None => return Ok(()), // No tool name, skip
+        None => return Ok(None), // No tool name, skip
     };
 
     if !matches!(tool_name.as_str(), "Edit" | "Write" | "MultiEdit") {
-        return Ok(()); // Not a file editing tool, skip
+        return Ok(None); // Not a file editing tool, skip
     }
 
     // Extract tool_input
     let tool_input = match input.tool_input {
         Some(input) => input,
-        None => return Ok(()), // No tool input, skip
+        None => return Ok(None), // No tool input, skip
     };
 
     // Collect all Rust file paths from the tool input
@@ -318,11 +380,13 @@ fn run() -> Result<(), CargoCheckError> {
 
     // If no Rust files, skip
     if rust_files.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     // Find all cargo roots and deduplicate
     let mut processed_roots = HashSet::new();
+    let mut accumulated_output = String::new();
+    let mut any_failed = false;
 
     for file_path in rust_files {
         let cargo_root = find_cargo_root(&file_path)?;
@@ -330,20 +394,59 @@ fn run() -> Result<(), CargoCheckError> {
 
         // Only run checks if we haven't processed this root yet
         if processed_roots.insert(root_path) {
-            run_all_checks(&cargo_root)?;
+            let result = run_all_checks(&cargo_root)?;
+            accumulated_output.push_str(&result.output);
+
+            if !result.success {
+                any_failed = true;
+            }
         }
     }
 
-    Ok(())
+    // If any checks failed, return a block response
+    if any_failed {
+        Ok(Some(HookResponse {
+            decision: "block".to_string(),
+            reasoning: "Rust compilation checks failed - code contains errors that must be fixed before proceeding".to_string(),
+            additional_context: accumulated_output,
+        }))
+    } else {
+        // All checks passed - no need to output anything
+        Ok(None)
+    }
 }
 
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("Error: {}", e);
+    match run() {
+        Ok(Some(response)) => {
+            // Output JSON response to stdout
+            if let Ok(json) = serde_json::to_string_pretty(&response) {
+                println!("{}", json);
+            } else {
+                eprintln!("Failed to serialize hook response");
+            }
+            // Exit with 0 - the JSON decision field indicates the block
+            std::process::exit(0);
+        }
+        Ok(None) => {
+            // Success, no output needed
+            std::process::exit(0);
+        }
+        Err(e) => {
+            // Hook execution error (not cargo failure) - output as block with error
+            let response = HookResponse {
+                decision: "block".to_string(),
+                reasoning: format!("Cargo check hook error: {}", e),
+                additional_context: "The cargo check hook encountered an internal error. Please check your Rust project configuration.".to_string(),
+            };
 
-        // Exit code 2 tells Claude Code to show stderr to the AI model immediately!
-        // This allows the AI to see and fix compilation errors
-        std::process::exit(2);
+            if let Ok(json) = serde_json::to_string_pretty(&response) {
+                println!("{}", json);
+            } else {
+                eprintln!("Error: {}", e);
+            }
+            std::process::exit(0);
+        }
     }
 }
 

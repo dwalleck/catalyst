@@ -11,9 +11,9 @@
 ✅ **Automatic workspace/package detection** - Finds Cargo.toml and runs appropriate command
 ✅ **Cross-platform** - Works on Linux, macOS, and Windows
 ✅ **Zero external dependencies** - Pure Rust, no jq or bash required
-✅ **Streaming output** - See compilation errors immediately
+✅ **Structured JSON output** - Provides compilation errors directly to the AI
 ✅ **Optional checks** - Enable clippy, tests, or formatting via environment variables
-✅ **Fail fast** - Blocks AI from proceeding if compilation fails
+✅ **Intelligent blocking** - Uses Claude Code's JSON hook API to block on compilation failures
 
 ---
 
@@ -100,8 +100,25 @@ Add to your project's `.claude/settings.json`:
    - Workspace root (if `[workspace]` in Cargo.toml)
    - Package root (if standard Cargo.toml)
 4. **Run Check:** Executes `cargo check` (with `--workspace` for workspaces)
-5. **Stream Output:** Shows compilation errors/warnings in real-time
-6. **Block on Failure:** Returns exit code 1 if compilation fails
+5. **Capture Output:** Collects all compilation errors/warnings
+6. **Block on Failure:** Returns JSON response with `decision: "block"` if compilation fails
+
+### JSON Output Format
+
+When checks fail, the hook returns a structured JSON response to Claude Code:
+
+```json
+{
+  "decision": "block",
+  "reasoning": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
+  "additionalContext": "<full cargo output with errors>"
+}
+```
+
+This allows Claude to:
+- See the compilation errors immediately
+- Understand what needs to be fixed
+- Automatically suggest corrections
 
 ---
 
@@ -173,41 +190,37 @@ $env:CARGO_CHECK_FMT = "true"
 
 ## Example Output
 
-### Success
-```
-🦀 Running check on workspace...
-    Checking catalyst-cli v0.1.0 (/home/user/catalyst/catalyst-cli)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
-✅ Cargo check passed
+### Success (No Output)
+
+When all checks pass, the hook exits silently with no output. Claude Code continues normally.
+
+### Compilation Error (JSON Response)
+
+When checks fail, the hook returns a JSON response that Claude Code displays to you and feeds back to the AI:
+
+```json
+{
+  "decision": "block",
+  "reasoning": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
+  "additionalContext": "🦀 Running check on workspace...\nerror[E0425]: cannot find value `foo` in this scope\n  --> catalyst-cli/src/bin/example.rs:10:9\n   |\n10 |         foo\n   |         ^^^ not found in this scope\n\nerror: could not compile `catalyst-cli` (bin \"example\")\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n❌ Cargo check failed with exit code 101\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+}
 ```
 
-### With Clippy
-```
-🦀 Running check on workspace...
-    Checking catalyst-cli v0.1.0 (/home/user/catalyst/catalyst-cli)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
-✅ Cargo check passed
-📎 Running clippy on workspace...
-    Checking catalyst-cli v0.1.0 (/home/user/catalyst/catalyst-cli)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s
-✅ Clippy passed
-```
+The AI receives this information and can:
+- See exactly what errors occurred
+- Understand the compilation failure
+- Suggest fixes or automatically correct the code
 
-### Compilation Error
-```
-🦀 Running check on workspace...
-    Checking catalyst-cli v0.1.0 (/home/user/catalyst/catalyst-cli)
-error[E0425]: cannot find value `foo` in this scope
-  --> catalyst-cli/src/bin/example.rs:10:9
-   |
-10 |         foo
-   |         ^^^ not found in this scope
+### Multiple Check Failures
 
-error: could not compile `catalyst-cli` (bin "example")
+If multiple checks are enabled and fail, all output is accumulated:
 
-❌ Compilation errors found!
-Error: [CC005] Cargo check failed with exit code: 101
-See output above for details
+```json
+{
+  "decision": "block",
+  "reasoning": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
+  "additionalContext": "🦀 Running check on workspace...\n<cargo check errors>\n\n📎 Running clippy on workspace...\n<clippy warnings>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n❌ Cargo clippy failed with exit code 101\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+}
 ```
 
 ---
