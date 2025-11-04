@@ -33,11 +33,21 @@ struct HookInput {
 }
 
 #[derive(Debug, Serialize)]
-struct HookResponse {
-    decision: String,
-    reasoning: String,
+struct HookSpecificOutput {
+    #[serde(rename = "hookEventName")]
+    hook_event_name: String,
     #[serde(rename = "additionalContext")]
     additional_context: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HookResponse {
+    decision: String,
+    reason: String,
+    #[serde(rename = "hookSpecificOutput")]
+    hook_specific_output: HookSpecificOutput,
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    system_message: Option<String>,
 }
 
 #[derive(Debug)]
@@ -433,8 +443,12 @@ fn run() -> Result<Option<HookResponse>, CargoCheckError> {
     if any_failed {
         Ok(Some(HookResponse {
             decision: "block".to_string(),
-            reasoning: "Rust compilation checks failed - code contains errors that must be fixed before proceeding".to_string(),
-            additional_context: accumulated_output,
+            reason: "Rust compilation checks failed - code contains errors that must be fixed before proceeding".to_string(),
+            hook_specific_output: HookSpecificOutput {
+                hook_event_name: "PostToolUse".to_string(),
+                additional_context: accumulated_output,
+            },
+            system_message: Some("Cargo check found compilation errors - see details below".to_string()),
         }))
     } else {
         // All checks passed - no need to output anything
@@ -461,8 +475,12 @@ fn main() {
             // Hook execution error (not cargo failure) - output as block with error
             let response = HookResponse {
                 decision: "block".to_string(),
-                reasoning: format!("Cargo check hook error: {}", e),
-                additional_context: "The cargo check hook encountered an internal error. Please check your Rust project configuration.".to_string(),
+                reason: format!("Cargo check hook error: {}", e),
+                hook_specific_output: HookSpecificOutput {
+                    hook_event_name: "PostToolUse".to_string(),
+                    additional_context: "The cargo check hook encountered an internal error. Please check your Rust project configuration.".to_string(),
+                },
+                system_message: Some("Cargo check hook encountered an error".to_string()),
             };
 
             // Serialization should never fail for our simple types - if it does, it's a bug
