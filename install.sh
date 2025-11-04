@@ -87,7 +87,7 @@ fi
 # Copy core binaries
 echo
 echo "📦 Installing binaries to $BIN_DIR..."
-for binary in target/release/skill-activation-prompt target/release/file-analyzer; do
+for binary in target/release/skill-activation-prompt target/release/file-analyzer target/release/cargo-check; do
     if [ -f "$binary" ]; then
         cp "$binary" "$BIN_DIR/"
         chmod +x "$BIN_DIR/$(basename $binary)"
