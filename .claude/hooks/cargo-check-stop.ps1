@@ -20,4 +20,15 @@
 #     }
 #   ]
 
+# Ensure cargo is in PATH
+$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+
+# Run in quiet mode by default (only show output on errors)
+# Set $env:CARGO_CHECK_QUIET="0" to see all output
+if (-not $env:CARGO_CHECK_QUIET) {
+    $env:CARGO_CHECK_QUIET = "true"
+}
+
+# Run cargo-check and exit with its exit code
 $input | & "$env:USERPROFILE\.claude-hooks\bin\cargo-check.exe"
+exit $LASTEXITCODE

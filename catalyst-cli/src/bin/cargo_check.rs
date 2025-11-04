@@ -137,7 +137,11 @@ fn run_cargo_command(
     emoji: &str,
     success_msg: &str,
 ) -> Result<(), CargoCheckError> {
-    eprintln!("{} Running {} on {}...", emoji, command, cargo_root.kind());
+    let quiet = env_is_enabled("CARGO_CHECK_QUIET");
+
+    if !quiet {
+        eprintln!("{} Running {} on {}...", emoji, command, cargo_root.kind());
+    }
 
     // Just use "cargo" - the wrapper script should ensure PATH is set correctly
     let mut cmd = Command::new("cargo");
@@ -170,12 +174,16 @@ fn run_cargo_command(
 
     if !status.success() {
         let code = status.code().unwrap_or(101);
-        eprintln!();
-        eprintln!("❌ {} failed!", command);
+        if !quiet {
+            eprintln!();
+            eprintln!("❌ {} failed!", command);
+        }
         return Err(CargoCheckError::CargoCheckFailed { code });
     }
 
-    eprintln!("{}", success_msg);
+    if !quiet {
+        eprintln!("{}", success_msg);
+    }
     Ok(())
 }
 
