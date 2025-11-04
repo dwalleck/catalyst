@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "UserPromptSubmit": {
+      "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.ps1"
+    },
+    "PostToolUse": {
+      "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/file-change-tracker.ps1",
+      "matchers": [
+        {
+          "type": "tool",
+          "pattern": "^(Edit|Write|MultiEdit)$"
+        },
+        {
+          "type": "path",
+          "pattern": "\\.(ts|tsx|js|jsx|py|rs|go|java|rb|php|c|cpp|h|hpp)$"
+        }
+      ]
+    }
+  }
+}

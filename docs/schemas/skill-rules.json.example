@@ -1,0 +1,88 @@
+{
+  "version": "1.0",
+  "skill-developer": {
+    "type": "keyword",
+    "enforcement": "suggest",
+    "priority": 95,
+    "keywords": [
+      "skill",
+      "create skill",
+      "skill activation",
+      "skill-rules.json",
+      "progressive disclosure",
+      "500-line rule"
+    ],
+    "intentPatterns": [
+      "creating a new skill",
+      "modifying skill activation",
+      "skill not activating"
+    ],
+    "pathPatterns": [
+      ".claude/skills/**/*",
+      "**/*SKILL.md",
+      "**/*skill-rules.json"
+    ],
+    "enabled": true
+  },
+  "backend-dev-guidelines": {
+    "type": "keyword",
+    "enforcement": "suggest",
+    "priority": 80,
+    "keywords": [
+      "express",
+      "prisma",
+      "controller",
+      "service",
+      "repository",
+      "middleware",
+      "route",
+      "api endpoint",
+      "database",
+      "orm"
+    ],
+    "intentPatterns": [
+      "creating an API endpoint",
+      "implementing a controller",
+      "database query",
+      "service layer logic"
+    ],
+    "pathPatterns": [
+      "src/**/*.ts",
+      "services/**/*.ts",
+      "routes/**/*.ts",
+      "controllers/**/*.ts",
+      "repositories/**/*.ts",
+      "middleware/**/*.ts"
+    ],
+    "enabled": true
+  },
+  "frontend-dev-guidelines": {
+    "type": "keyword",
+    "enforcement": "suggest",
+    "priority": 80,
+    "keywords": [
+      "react",
+      "component",
+      "mui",
+      "tanstack",
+      "useSuspenseQuery",
+      "router",
+      "styling",
+      "theme"
+    ],
+    "intentPatterns": [
+      "creating a React component",
+      "fetching data with TanStack Query",
+      "styling with MUI",
+      "routing with TanStack Router"
+    ],
+    "pathPatterns": [
+      "src/**/*.{ts,tsx}",
+      "app/**/*.{ts,tsx}",
+      "components/**/*.{ts,tsx}",
+      "pages/**/*.{ts,tsx}",
+      "features/**/*.{ts,tsx}"
+    ],
+    "enabled": true
+  }
+}
