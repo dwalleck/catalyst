@@ -21,4 +21,7 @@
 #     }
 #   ]
 
+# Ensure cargo is in PATH
+export PATH="$HOME/.cargo/bin:$PATH"
+
 cat | ~/.claude-hooks/bin/cargo-check

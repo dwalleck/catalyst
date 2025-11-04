@@ -1,5 +1,7 @@
+// Cargo check hook - automatically runs cargo check when editing Rust files
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
+
 use std::env;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -93,12 +95,22 @@ fn find_cargo_root(file_path: &Path) -> Result<CargoRoot, CargoCheckError> {
         if cargo_toml.exists() {
             // Check if this is a workspace using TOML parsing
             if is_workspace(&cargo_toml) {
-                return Ok(CargoRoot::Workspace(current_dir.to_path_buf()));
+                let root_path = if current_dir.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    current_dir.to_path_buf()
+                };
+                return Ok(CargoRoot::Workspace(root_path));
             }
 
             // Remember the first package found
             if package_root.is_none() {
-                package_root = Some(current_dir.to_path_buf());
+                let root_path = if current_dir.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    current_dir.to_path_buf()
+                };
+                package_root = Some(root_path);
             }
         }
 
@@ -127,6 +139,7 @@ fn run_cargo_command(
 ) -> Result<(), CargoCheckError> {
     eprintln!("{} Running {} on {}...", emoji, command, cargo_root.kind());
 
+    // Just use "cargo" - the wrapper script should ensure PATH is set correctly
     let mut cmd = Command::new("cargo");
     cmd.arg(command);
 
@@ -508,6 +521,59 @@ version = "0.1.0"
         fs::remove_file(lib_rs_path).unwrap();
         fs::remove_file(package_cargo_toml).unwrap();
         fs::remove_file(workspace_cargo_toml).unwrap();
+        fs::remove_dir(src_dir).unwrap();
+        fs::remove_dir(crate1_dir).unwrap();
+        fs::remove_dir(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_cargo_root_relative_path_at_workspace_root() {
+        // Regression test for empty path bug when using relative paths
+        // This tests the case where a relative path walks up to the workspace root
+        let temp_dir = std::env::temp_dir().join("cargo_check_test_relative_workspace");
+        let crate1_dir = temp_dir.join("crate1");
+        let src_dir = crate1_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // Create workspace Cargo.toml in temp_dir
+        let workspace_cargo = temp_dir.join("Cargo.toml");
+        let mut file = fs::File::create(&workspace_cargo).unwrap();
+        writeln!(file, "[workspace]\nmembers = [\"crate1\"]").unwrap();
+
+        // Create package Cargo.toml in crate1
+        let package_cargo = crate1_dir.join("Cargo.toml");
+        let mut file = fs::File::create(&package_cargo).unwrap();
+        writeln!(file, "[package]\nname = \"crate1\"\nversion = \"0.1.0\"").unwrap();
+
+        let lib_rs = src_dir.join("lib.rs");
+        fs::File::create(&lib_rs).unwrap();
+
+        // Change to temp_dir and use a relative path
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        // Use relative path from workspace root
+        let relative_path = PathBuf::from("crate1/src/lib.rs");
+        let result = find_cargo_root(&relative_path);
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let cargo_root = result.unwrap();
+
+        // Should find workspace root
+        assert_eq!(cargo_root.kind(), "workspace");
+
+        // The path should be "." not empty string
+        let path = cargo_root.path();
+        assert!(!path.as_os_str().is_empty(), "Path should not be empty");
+        assert!(path == PathBuf::from(".") || path.is_absolute());
+
+        // Clean up
+        fs::remove_file(lib_rs).unwrap();
+        fs::remove_file(package_cargo).unwrap();
+        fs::remove_file(workspace_cargo).unwrap();
         fs::remove_dir(src_dir).unwrap();
         fs::remove_dir(crate1_dir).unwrap();
         fs::remove_dir(temp_dir).unwrap();
