@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::fmt::Write as FmtWrite;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -78,6 +79,16 @@ fn env_is_enabled(var: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Normalizes a path to avoid empty paths (converts "" to ".")
+/// This handles the edge case where relative paths can become empty strings
+fn normalize_path(path: &Path) -> PathBuf {
+    if path.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// Checks if a Cargo.toml file defines a workspace using TOML parsing
 fn is_workspace(cargo_toml_path: &Path) -> bool {
     if let Ok(content) = std::fs::read_to_string(cargo_toml_path) {
@@ -106,22 +117,12 @@ fn find_cargo_root(file_path: &Path) -> Result<CargoRoot, CargoCheckError> {
         if cargo_toml.exists() {
             // Check if this is a workspace using TOML parsing
             if is_workspace(&cargo_toml) {
-                let root_path = if current_dir.as_os_str().is_empty() {
-                    PathBuf::from(".")
-                } else {
-                    current_dir.to_path_buf()
-                };
-                return Ok(CargoRoot::Workspace(root_path));
+                return Ok(CargoRoot::Workspace(normalize_path(current_dir)));
             }
 
             // Remember the first package found
             if package_root.is_none() {
-                let root_path = if current_dir.as_os_str().is_empty() {
-                    PathBuf::from(".")
-                } else {
-                    current_dir.to_path_buf()
-                };
-                package_root = Some(root_path);
+                package_root = Some(normalize_path(current_dir));
             }
         }
 
@@ -152,16 +153,19 @@ fn run_cargo_command(
     let mut output_buffer = String::new();
 
     if !quiet {
-        let msg = format!(
-            "{} Running {} on {}...\n",
+        writeln!(
+            output_buffer,
+            "{} Running {} on {}...",
             emoji,
             command,
             cargo_root.kind()
-        );
-        output_buffer.push_str(&msg);
+        )
+        .unwrap();
     }
 
-    // Just use "cargo" - the wrapper script should ensure PATH is set correctly
+    // Security: Relies on wrapper script setting trusted PATH
+    // Users should ensure ~/.cargo/bin is in PATH before untrusted directories
+    // The wrapper script sets PATH="$HOME/.cargo/bin:$PATH" to prioritize the user's cargo
     let mut cmd = Command::new("cargo");
     cmd.arg(command);
 
@@ -207,37 +211,60 @@ fn run_cargo_command(
         .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "Failed to capture stderr"))
         .map_err(CargoCheckError::CargoExecution)?;
 
-    // Capture output to buffer
-    let stdout_reader = BufReader::new(stdout);
-    let stderr_reader = BufReader::new(stderr);
+    // Read stdout and stderr concurrently using threads to avoid potential deadlock
+    // If we read them sequentially and cargo fills one pipe buffer, it could block
+    let stdout_thread = std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        reader
+            .lines()
+            .map_while(Result::ok)
+            .filter(|line| !quiet || line.contains("error") || line.contains("warning"))
+            .collect::<Vec<_>>()
+    });
 
-    // Process stdout
-    for line in stdout_reader.lines().map_while(Result::ok) {
-        if !quiet || line.contains("error") || line.contains("warning") {
-            output_buffer.push_str(&line);
-            output_buffer.push('\n');
-        }
+    let stderr_thread = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        reader.lines().map_while(Result::ok).collect::<Vec<_>>()
+    });
+
+    // Join threads and collect output
+    let stdout_lines = stdout_thread
+        .join()
+        .expect("stdout thread panicked - this is a bug");
+    let stderr_lines = stderr_thread
+        .join()
+        .expect("stderr thread panicked - this is a bug");
+
+    // Add stdout lines to output buffer
+    for line in stdout_lines {
+        writeln!(output_buffer, "{}", line).unwrap();
     }
 
-    // Process stderr (always capture, even in quiet mode)
-    for line in stderr_reader.lines().map_while(Result::ok) {
-        output_buffer.push_str(&line);
-        output_buffer.push('\n');
+    // Add stderr lines to output buffer (always included, even in quiet mode)
+    for line in stderr_lines {
+        writeln!(output_buffer, "{}", line).unwrap();
     }
 
     // Wait for the command to complete
     let status = child.wait().map_err(CargoCheckError::CargoExecution)?;
-    let exit_code = status.code().unwrap_or(101);
+    // Exit code 101 is used by cargo for compilation errors
+    // If status.code() is None (e.g., terminated by signal on Unix), use 101 as fallback
+    let exit_code = status.code().unwrap_or_else(|| {
+        eprintln!("Warning: cargo process terminated abnormally (possibly by signal), using exit code 101");
+        101
+    });
 
     if !status.success() {
         // Add failure summary to output
-        output_buffer.push('\n');
-        output_buffer.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        output_buffer.push_str(&format!(
-            "❌ Cargo {} failed with exit code {}\n",
+        writeln!(output_buffer).unwrap();
+        writeln!(output_buffer, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").unwrap();
+        writeln!(
+            output_buffer,
+            "❌ Cargo {} failed with exit code {}",
             command, exit_code
-        ));
-        output_buffer.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        )
+        .unwrap();
+        writeln!(output_buffer, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").unwrap();
 
         return Ok(CommandResult {
             success: false,
@@ -247,8 +274,7 @@ fn run_cargo_command(
     }
 
     if !quiet {
-        output_buffer.push_str(success_msg);
-        output_buffer.push('\n');
+        writeln!(output_buffer, "{}", success_msg).unwrap();
     }
 
     Ok(CommandResult {
@@ -420,11 +446,10 @@ fn main() {
     match run() {
         Ok(Some(response)) => {
             // Output JSON response to stdout
-            if let Ok(json) = serde_json::to_string_pretty(&response) {
-                println!("{}", json);
-            } else {
-                eprintln!("Failed to serialize hook response");
-            }
+            // Serialization should never fail for our simple types - if it does, it's a bug
+            let json = serde_json::to_string_pretty(&response)
+                .expect("Failed to serialize hook response - this is a bug");
+            println!("{}", json);
             // Exit with 0 - the JSON decision field indicates the block
             std::process::exit(0);
         }
@@ -440,11 +465,10 @@ fn main() {
                 additional_context: "The cargo check hook encountered an internal error. Please check your Rust project configuration.".to_string(),
             };
 
-            if let Ok(json) = serde_json::to_string_pretty(&response) {
-                println!("{}", json);
-            } else {
-                eprintln!("Error: {}", e);
-            }
+            // Serialization should never fail for our simple types - if it does, it's a bug
+            let json = serde_json::to_string_pretty(&response)
+                .expect("Failed to serialize error response - this is a bug");
+            println!("{}", json);
             std::process::exit(0);
         }
     }

@@ -36,6 +36,14 @@ export CARGO_CHECK_QUIET="${CARGO_CHECK_QUIET:-false}"
 # Log hook execution for debugging (optional - comment out when not needed)
 echo "$(date '+%Y-%m-%d %H:%M:%S') - cargo-check hook executed" >> /tmp/cargo-check.log
 
+# Check if cargo-check binary exists
+CARGO_CHECK_BIN="$HOME/.claude-hooks/bin/cargo-check"
+if [ ! -x "$CARGO_CHECK_BIN" ]; then
+    echo "Error: cargo-check binary not found at $CARGO_CHECK_BIN" >&2
+    echo "Please run ./install.sh from the catalyst repository" >&2
+    exit 1
+fi
+
 # Run cargo-check and explicitly exit with its exit code
-cat | ~/.claude-hooks/bin/cargo-check
+cat | "$CARGO_CHECK_BIN"
 exit $?

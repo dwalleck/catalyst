@@ -32,6 +32,14 @@ if (-not $env:CARGO_CHECK_QUIET) {
     $env:CARGO_CHECK_QUIET = "true"
 }
 
+# Check if cargo-check binary exists
+$CargoCheckBin = "$env:USERPROFILE\.claude-hooks\bin\cargo-check.exe"
+if (-not (Test-Path $CargoCheckBin)) {
+    Write-Error "Error: cargo-check binary not found at $CargoCheckBin"
+    Write-Error "Please run .\install.ps1 from the catalyst repository"
+    exit 1
+}
+
 # Run cargo-check and exit with its exit code
-$input | & "$env:USERPROFILE\.claude-hooks\bin\cargo-check.exe"
+$input | & $CargoCheckBin
 exit $LASTEXITCODE
