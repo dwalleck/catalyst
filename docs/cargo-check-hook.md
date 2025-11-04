@@ -110,15 +110,46 @@ When checks fail, the hook returns a structured JSON response to Claude Code:
 ```json
 {
   "decision": "block",
-  "reasoning": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
-  "additionalContext": "<full cargo output with errors>"
+  "reason": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "<full cargo output with errors>"
+  },
+  "systemMessage": "Cargo check found compilation errors - see details below"
 }
 ```
+
+**Important:** The hook always exits with code 0, even on failure. The `decision: "block"` field controls blocking behavior, not the exit code.
 
 This allows Claude to:
 - See the compilation errors immediately
 - Understand what needs to be fixed
 - Automatically suggest corrections
+
+### Exit Code Evolution
+
+This hook evolved through several iterations:
+
+**v1 (Exit Code Strategy):**
+- Failed checks → exit 2 (shows stderr to AI)
+- Problem: Inconsistent output handling, no structured data
+
+**v2 (JSON Strategy - Current):**
+- Always exit 0
+- Use JSON `decision: "block"` for blocking
+- Benefits:
+  - Structured error data
+  - Consistent output formatting
+  - User and AI see same information
+  - Better integration with Claude Code's hook API
+
+**Why Exit 0?**
+
+The PostToolUse hook API expects:
+- Exit 0 = Hook executed successfully (check the JSON for results)
+- Exit non-zero = Hook itself failed (internal error)
+
+By using JSON with exit 0, we separate "hook execution status" from "check results"
 
 ---
 
@@ -201,8 +232,12 @@ When checks fail, the hook returns a JSON response that Claude Code displays to 
 ```json
 {
   "decision": "block",
-  "reasoning": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
-  "additionalContext": "🦀 Running check on workspace...\nerror[E0425]: cannot find value `foo` in this scope\n  --> catalyst-cli/src/bin/example.rs:10:9\n   |\n10 |         foo\n   |         ^^^ not found in this scope\n\nerror: could not compile `catalyst-cli` (bin \"example\")\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n❌ Cargo check failed with exit code 101\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+  "reason": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "🦀 Running check on workspace...\nerror[E0425]: cannot find value `foo` in this scope\n  --> catalyst-cli/src/bin/example.rs:10:9\n   |\n10 |         foo\n   |         ^^^ not found in this scope\n\nerror: could not compile `catalyst-cli` (bin \"example\")\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n❌ Cargo check failed with exit code 101\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+  },
+  "systemMessage": "Cargo check found compilation errors - see details below"
 }
 ```
 
@@ -218,10 +253,16 @@ If multiple checks are enabled and fail, all output is accumulated:
 ```json
 {
   "decision": "block",
-  "reasoning": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
-  "additionalContext": "🦀 Running check on workspace...\n<cargo check errors>\n\n📎 Running clippy on workspace...\n<clippy warnings>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n❌ Cargo clippy failed with exit code 101\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+  "reason": "Rust compilation checks failed - code contains errors that must be fixed before proceeding",
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "🦀 Running check on workspace...\n<cargo check errors>\n\n📎 Running clippy on workspace...\n<clippy warnings>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n❌ Cargo clippy failed with exit code 101\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+  },
+  "systemMessage": "Cargo check found compilation errors - see details below"
 }
 ```
+
+**Note on Output Size:** The hook limits output to 50KB to prevent overwhelming Claude with massive error output from very large workspaces. If output is truncated, focus on fixing the first few errors shown.
 
 ---
 

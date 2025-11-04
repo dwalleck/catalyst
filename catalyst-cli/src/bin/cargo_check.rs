@@ -9,6 +9,10 @@ use std::process::{Command, Stdio};
 use thiserror::Error;
 use toml::Value;
 
+// Constants
+const DECISION_BLOCK: &str = "block";
+const MAX_OUTPUT_BYTES: usize = 50_000; // 50KB limit to prevent overwhelming Claude with massive error output
+
 #[derive(Error, Debug)]
 enum CargoCheckError {
     #[error("[CC001] Failed to read input from stdin")]
@@ -99,15 +103,57 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Truncates output if it exceeds MAX_OUTPUT_BYTES to prevent overwhelming Claude
+/// with massive error output from very large workspaces
+fn truncate_output(output: String) -> String {
+    if output.len() <= MAX_OUTPUT_BYTES {
+        return output;
+    }
+
+    let truncated = &output[..MAX_OUTPUT_BYTES];
+    let bytes_removed = output.len() - MAX_OUTPUT_BYTES;
+
+    format!(
+        "{}\n\n... [Output truncated: {} bytes removed to stay within {} byte limit] ...\n\
+        Hint: Focus on fixing the first few errors shown above.",
+        truncated, bytes_removed, MAX_OUTPUT_BYTES
+    )
+}
+
 /// Checks if a Cargo.toml file defines a workspace using TOML parsing
 fn is_workspace(cargo_toml_path: &Path) -> bool {
-    if let Ok(content) = std::fs::read_to_string(cargo_toml_path) {
-        if let Ok(toml) = content.parse::<Value>() {
-            // Check if [workspace] section exists in the parsed TOML
-            return toml.get("workspace").is_some();
+    let debug = env_is_enabled("CARGO_CHECK_DEBUG");
+
+    if debug {
+        eprintln!("[DEBUG] Checking if {:?} is a workspace", cargo_toml_path);
+    }
+
+    match std::fs::read_to_string(cargo_toml_path) {
+        Ok(content) => match content.parse::<Value>() {
+            Ok(toml) => {
+                let is_ws = toml.get("workspace").is_some();
+                if debug {
+                    eprintln!(
+                        "[DEBUG] TOML parsed successfully, workspace section present: {}",
+                        is_ws
+                    );
+                }
+                is_ws
+            }
+            Err(e) => {
+                if debug {
+                    eprintln!("[DEBUG] Failed to parse TOML: {}", e);
+                }
+                false
+            }
+        },
+        Err(e) => {
+            if debug {
+                eprintln!("[DEBUG] Failed to read file: {}", e);
+            }
+            false
         }
     }
-    false
 }
 
 /// Finds the Cargo.toml root for a given file path
@@ -454,11 +500,11 @@ fn run() -> Result<Option<HookResponse>, CargoCheckError> {
     // If any checks failed, return a block response
     if any_failed {
         Ok(Some(HookResponse {
-            decision: "block".to_string(),
+            decision: DECISION_BLOCK.to_string(),
             reason: "Rust compilation checks failed - code contains errors that must be fixed before proceeding".to_string(),
             hook_specific_output: HookSpecificOutput {
                 hook_event_name: "PostToolUse".to_string(),
-                additional_context: accumulated_output,
+                additional_context: truncate_output(accumulated_output),
             },
             system_message: Some("Cargo check found compilation errors - see details below".to_string()),
         }))
@@ -486,7 +532,7 @@ fn main() {
         Err(e) => {
             // Hook execution error (not cargo failure) - output as block with error
             let response = HookResponse {
-                decision: "block".to_string(),
+                decision: DECISION_BLOCK.to_string(),
                 reason: format!("Cargo check hook error: {}", e),
                 hook_specific_output: HookSpecificOutput {
                     hook_event_name: "PostToolUse".to_string(),
