@@ -20,7 +20,8 @@ This document specifies all major algorithms in pseudocode before implementation
 2. Status Determination Rules
 3. Auto-Fix Decision Tree
 4. Skill Hash Tracking Algorithm
-5. Default PathPatterns Strategy
+5. Path Traversal Validation
+6. Default PathPatterns Strategy
 
 ---
 
@@ -30,7 +31,8 @@ This document specifies all major algorithms in pseudocode before implementation
 2. [Status Determination Rules](#status-determination-rules)
 3. [Auto-Fix Decision Tree](#auto-fix-decision-tree)
 4. [Skill Hash Tracking Algorithm](#skill-hash-tracking-algorithm)
-5. [Default PathPatterns Strategy](#default-pathpatterns-strategy)
+5. [Path Traversal Validation](#path-traversal-validation)
+6. [Default PathPatterns Strategy](#default-pathpatterns-strategy)
 
 ---
 
@@ -619,6 +621,139 @@ END FUNCTION
 
 ---
 
+## Path Traversal Validation
+
+**Purpose:** Prevent directory traversal attacks when installing skills to ensure files stay within `.claude/` directory.
+
+### Security Concern
+
+**Problem:** Malicious or compromised embedded skills could contain file paths that escape the `.claude/` directory:
+
+```
+.claude/skills/
+  evil-skill/
+    ../../../etc/passwd        # ❌ Escapes to /etc/passwd
+    ../../../../home/user/.ssh/id_rsa  # ❌ Steals SSH key
+```
+
+**Impact:** Without validation, skill installation could:
+- Overwrite system files
+- Write to arbitrary locations
+- Exfiltrate sensitive data
+
+### Validation Algorithm
+
+```
+FUNCTION validate_skill_path(skill_id: String, rel_path: PathBuf, base_dir: PathBuf) -> Result<()>
+    // 1. Build expected path
+    expected_base = base_dir.join(".claude/skills").join(skill_id)
+
+    // 2. Build actual path (may contain ..)
+    actual_path = expected_base.join(rel_path)
+
+    // 3. Canonicalize to resolve .. and symlinks
+    canonical_actual = canonicalize_path(&actual_path)?
+
+    // 4. Canonicalize expected base
+    canonical_base = canonicalize_path(&expected_base)?
+
+    // 5. Verify actual path starts with expected base
+    IF NOT canonical_actual.starts_with(&canonical_base) THEN
+        RETURN Err(CatalystError::PathTraversalDetected {
+            skill_id: skill_id,
+            attempted_path: rel_path,
+            reason: "Path escapes skill directory"
+        })
+    END IF
+
+    RETURN Ok(())
+END FUNCTION
+```
+
+### Integration with Skill Installation
+
+```
+FUNCTION install_skill_file(skill_id: String, file_data: &[u8], rel_path: PathBuf) -> Result<()>
+    // 1. SECURITY: Validate path before ANY filesystem operation
+    validate_skill_path(skill_id, &rel_path, project_root)?
+
+    // 2. Build target path (now safe)
+    target_path = project_root.join(".claude/skills").join(skill_id).join(rel_path)
+
+    // 3. Ensure parent directory exists
+    IF let Some(parent) = target_path.parent() THEN
+        ensure_directory_exists(parent)?
+    END IF
+
+    // 4. Write file
+    write_file_atomic(&target_path, file_data)?
+
+    RETURN Ok(())
+END FUNCTION
+```
+
+### Attack Vectors Prevented
+
+| Attack | Example Path | Detection |
+|--------|-------------|-----------|
+| Parent directory traversal | `../../../etc/passwd` | ❌ Canonicalized path escapes base |
+| Absolute path | `/etc/passwd` | ❌ Doesn't start with base |
+| Symlink escape | `link -> /etc/passwd` | ❌ Canonicalization follows link |
+| Windows drive letter | `C:\Windows\System32\` | ❌ Doesn't start with base |
+| UNC path (Windows) | `\\?\C:\sensitive` | ❌ Doesn't start with base |
+| Double encoding | `..%2F..%2Fetc%2Fpasswd` | ✅ Decoded before validation |
+
+### Edge Cases
+
+| Edge Case | Handling |
+|-----------|----------|
+| Symlink within `.claude/` | ✅ Allowed (resolves within base) |
+| Skill file named `..` | ❌ Rejected (escapes directory) |
+| Very long path (>4096) | ❌ Canonicalization may fail (error) |
+| Path doesn't exist yet | ✅ Use parent for validation |
+| Case-insensitive FS (Windows) | ✅ Canonicalization handles |
+
+### Error Messages
+
+```rust
+#[error("Path traversal detected in skill: {skill_id}
+Attempted path: {attempted_path}
+Reason: {reason}
+
+Skills must only write to: .claude/skills/{skill_id}/
+This may indicate a compromised or malicious skill.")]
+PathTraversalDetected {
+    skill_id: String,
+    attempted_path: PathBuf,
+    reason: String,
+}
+```
+
+### Testing
+
+**Unit Tests Required:**
+
+```rust
+#[test]
+fn test_path_traversal_prevention() {
+    // Should reject
+    assert!(validate_skill_path("skill-1", Path::new("../../etc/passwd"), root).is_err());
+    assert!(validate_skill_path("skill-1", Path::new("/etc/passwd"), root).is_err());
+
+    // Should allow
+    assert!(validate_skill_path("skill-1", Path::new("SKILL.md"), root).is_ok());
+    assert!(validate_skill_path("skill-1", Path::new("resources/guide.md"), root).is_ok());
+}
+```
+
+### Performance Considerations
+
+- **Canonicalization overhead**: ~1-5ms per file
+- **Total impact**: ~10-50ms for 10-100 skill files
+- **Acceptable**: Security benefit outweighs minor performance cost
+
+---
+
 ## Default PathPatterns Strategy
 
 **Purpose:** Generate sensible default pathPatterns for skill-rules.json that work across different project structures.
@@ -860,6 +995,7 @@ END FUNCTION
 - [x] Specify status determination rules (Healthy/Warning/Error)
 - [x] Specify auto-fix decision tree in pseudocode
 - [x] Specify skill hash tracking algorithm
+- [x] Specify path traversal validation (security)
 - [x] Document default pathPatterns strategy
 - [x] Review all algorithms for edge cases
 

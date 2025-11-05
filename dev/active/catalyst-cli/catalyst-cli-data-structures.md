@@ -677,6 +677,7 @@ fn detect() -> Platform {
 | `JsonError` | `source: serde_json::Error`, `file: PathBuf` | JSON parsing/generation failed |
 | `SkillNotFound` | `skill_id: String`, `available: Vec<String>` | Requested skill not in embedded resources |
 | `SkillHashMismatch` | `skill_id: String` | Skill modified locally (hash mismatch) |
+| `PathTraversalDetected` | `skill_id: String`, `attempted_path: PathBuf`, `reason: String` | Skill file path escapes `.claude/` directory (security) |
 | `NoHomeDirectory` | - | Cannot determine home directory |
 | `PermissionDenied` | `path: PathBuf`, `operation: String` | Insufficient permissions |
 | `AlreadyInitialized` | `catalyst_version: String` | .catalyst-version exists, use --force |
@@ -731,6 +732,16 @@ Available skills:
 Update will skip this skill to preserve your changes.
 
 Use --force to overwrite with latest version."
+
+// PathTraversalDetected
+"Path traversal detected in skill: {skill_id}
+Attempted path: {attempted_path}
+Reason: {reason}
+
+Skills must only write to: .claude/skills/{skill_id}/
+This may indicate a compromised or malicious skill.
+
+Security: Skill installation aborted."
 
 // NoHomeDirectory
 "Cannot determine home directory.

@@ -577,6 +577,92 @@ if !is_valid_sha256(&stored_hash) {
 
 ## Path Manipulation Helpers
 
+### validate_skill_path()
+
+**Purpose:** Validate that a skill file path stays within the skill's directory (prevents path traversal attacks).
+
+**Signature:**
+```rust
+fn validate_skill_path(skill_id: &str, rel_path: &Path, base_dir: &Path) -> Result<(), CatalystError>
+```
+
+**Implementation:**
+
+```
+FUNCTION validate_skill_path(skill_id: &str, rel_path: &Path, base_dir: &Path) -> Result<()>
+    // 1. Build expected base path for this skill
+    expected_base = base_dir.join(".claude/skills").join(skill_id)
+
+    // 2. Build actual path (may contain ..)
+    actual_path = expected_base.join(rel_path)
+
+    // 3. Canonicalize to resolve .. and symlinks
+    canonical_actual = canonicalize_path(&actual_path)?
+
+    // 4. Canonicalize expected base
+    canonical_base = canonicalize_path(&expected_base)?
+
+    // 5. Verify actual path starts with expected base
+    IF NOT canonical_actual.starts_with(&canonical_base) THEN
+        RETURN Err(CatalystError::PathTraversalDetected {
+            skill_id: skill_id.to_string(),
+            attempted_path: rel_path.to_path_buf(),
+            reason: "Path escapes skill directory".to_string()
+        })
+    END IF
+
+    RETURN Ok(())
+END FUNCTION
+```
+
+**Security Guarantees:**
+
+| Attack Vector | Detection Method |
+|---------------|------------------|
+| Parent directory (`../../../etc/passwd`) | Canonicalization resolves to path outside base |
+| Absolute path (`/etc/passwd`) | Doesn't start with base directory |
+| Symlink escape | Canonicalization follows symlink, detects escape |
+| Windows drive letter (`C:\...`) | Doesn't start with base |
+| UNC path (`\\?\...`) | Doesn't start with base |
+
+**Edge Cases:**
+
+| Case | Handling |
+|------|----------|
+| Path doesn't exist yet | Use parent directory for validation |
+| Symlink within `.claude/` | ✅ Allowed (resolves within base) |
+| Very long path | May fail canonicalization (returns error) |
+| Case-insensitive filesystem | Canonicalization normalizes case |
+
+**Example Usage:**
+```rust
+// Before writing any skill file
+validate_skill_path("skill-developer", Path::new("resources/guide.md"), &project_root)?;
+
+// Now safe to write
+let target = project_root
+    .join(".claude/skills/skill-developer")
+    .join("resources/guide.md");
+write_file_atomic(&target, content)?;
+```
+
+**Example Rejections:**
+```rust
+// ❌ Rejected - escapes to parent
+validate_skill_path("skill-1", Path::new("../../etc/passwd"), &root)
+// Error: PathTraversalDetected
+
+// ❌ Rejected - absolute path
+validate_skill_path("skill-1", Path::new("/etc/passwd"), &root)
+// Error: PathTraversalDetected
+
+// ✅ Allowed - within skill directory
+validate_skill_path("skill-1", Path::new("resources/guide.md"), &root)
+// Ok(())
+```
+
+---
+
 ### to_forward_slashes()
 
 **Purpose:** Convert path to use forward slashes (even on Windows).
@@ -859,6 +945,7 @@ let wrapper_content = substitute_template_vars(template, &vars);
 | `hash_file()` | SHA256 hash | `String` | No |
 | `validate_json_file()` | Parse JSON | `Value` | No |
 | `is_valid_sha256()` | Validate hash format | `bool` | No |
+| `validate_skill_path()` | Path traversal prevention | `Result<()>` | No (security) |
 | `to_forward_slashes()` | Normalize path | `String` | No |
 | `canonicalize_path()` | Resolve symlinks | `PathBuf` | Yes (Windows UNC) |
 | `find_binary_path()` | Locate binary | `Option<PathBuf>` | Yes (extension) |

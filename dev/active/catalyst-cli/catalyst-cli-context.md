@@ -370,6 +370,15 @@ fn check_file_change_tracker() -> BinaryStatus {
 ```rust
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use serde::{Deserialize, Serialize};
+use chrono::Utc;
+
+#[derive(Serialize, Deserialize)]
+struct LockData {
+    pid: u32,
+    started_at: String,
+    command: String,
+}
 
 fn acquire_init_lock(claude_dir: &Path) -> Result<File, CatalystError> {
     let lock_path = claude_dir.join(".catalyst.lock");
@@ -389,8 +398,15 @@ fn acquire_init_lock(claude_dir: &Path) -> Result<File, CatalystError> {
             }
         })?;
 
-    // Write PID for debugging
-    writeln!(lock_file, "{}", std::process::id())?;
+    // Write lock data as JSON
+    let lock_data = LockData {
+        pid: std::process::id(),
+        started_at: Utc::now().to_rfc3339(),
+        command: std::env::args().collect::<Vec<_>>().join(" "),
+    };
+
+    let json = serde_json::to_string_pretty(&lock_data)?;
+    writeln!(lock_file, "{}", json)?;
 
     Ok(lock_file)
 }
@@ -632,23 +648,22 @@ enum CatalystError {
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [{
-          "type": "command",
-          "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh"
-        }]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matchers": ["Edit", "MultiEdit", "Write", "NotebookEdit"],
-        "hooks": [{
-          "type": "command",
-          "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/file-change-tracker.sh"
-        }]
-      }
-    ]
+    "UserPromptSubmit": {
+      "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/skill-activation-prompt.sh"
+    },
+    "PostToolUse": {
+      "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/file-change-tracker.sh",
+      "matchers": [
+        {
+          "type": "tool",
+          "pattern": "^(Edit|Write|MultiEdit)$"
+        },
+        {
+          "type": "path",
+          "pattern": "\\.(ts|tsx|js|jsx|py|rs|go|java|rb|php|c|cpp|h|hpp)$"
+        }
+      ]
+    }
   }
 }
 ```

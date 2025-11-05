@@ -45,6 +45,7 @@ These dependencies must be added to `Cargo.toml` for the CLI implementation:
 | `include_dir` | 0.7 | Embed skills at compile time | Phase 3 | Zero-copy file embedding |
 | `dirs` | 5.0 | Cross-platform home directory | Phase 1 | `~/.claude-hooks/bin/` detection |
 | `dunce` | 1.0 | Canonicalize paths (Windows UNC fix) | Phase 2 | Handles `\\?\` paths |
+| `tempfile` | 3.14 | Atomic file writes | Phase 2 | Used in `write_file_atomic()` |
 
 ### 3. Platform-Specific Dependencies
 
@@ -66,8 +67,9 @@ These dependencies must be added to `Cargo.toml` for the CLI implementation:
 
 | Dependency | Version | Purpose | Phase Used |
 |------------|---------|---------|------------|
-| `tempfile` | 3.14 | Test isolation (TempDir) | Phase 8 |
 | `cargo-husky` | 1.0 | Pre-commit hooks | All (auto-installs) |
+
+**Note:** `tempfile` is now a production dependency (used in `write_file_atomic()`), not just dev.
 
 ---
 
@@ -160,6 +162,7 @@ indicatif = "0.17"
 include_dir = "0.7"
 dirs = "5.0"
 dunce = "1.0"
+tempfile = "3.14"
 
 [features]
 default = []
@@ -181,6 +184,7 @@ indicatif = "0.17"
 include_dir = "0.7"
 dirs = "5.0"
 dunce = "1.0"
+tempfile = "3.14"
 ```
 
 ### Verification Commands
@@ -268,7 +272,7 @@ $ ls -lh target/release/settings-manager
 | `sha2` | +0.05 MB |
 | `dialoguer` + `indicatif` | +0.2 MB |
 | `include_dir` | +0.05 MB |
-| `dirs` + `dunce` | +0.03 MB |
+| `dirs` + `dunce` + `tempfile` | +0.04 MB |
 | **Estimated Total** | **~2.6 MB** |
 
 **Conclusion:** Well within acceptable range (<5MB target from plan).
@@ -287,6 +291,7 @@ All dependencies are MIT or MIT/Apache-2.0 dual-licensed, compatible with this p
 | `include_dir` | MIT | ✅ |
 | `dirs` | MIT/Apache-2.0 | ✅ |
 | `dunce` | MIT/Apache-2.0 | ✅ |
+| `tempfile` | MIT/Apache-2.0 | ✅ |
 
 ---
 
@@ -304,6 +309,7 @@ All dependencies are MIT or MIT/Apache-2.0 dual-licensed, compatible with this p
 | `include_dir` 0.7 | 1.56+ | ✅ Compatible |
 | `dirs` 5.0 | 1.56+ | ✅ Compatible |
 | `dunce` 1.0 | 1.56+ | ✅ Compatible |
+| `tempfile` 3.14 | 1.63+ | ⚠️ Requires bump if needed |
 
 **Recommendation:** Bump workspace MSRV to 1.63+ (Rust 2022 Q4) to support `dialoguer` and `indicatif`.
 
