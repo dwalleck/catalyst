@@ -127,12 +127,12 @@ foreach ($binary in $coreBinaries) {
 
 # Copy SQLite binaries if built
 if ($Sqlite) {
-    $sqliteBinary = "target\release\post-tool-use-tracker-sqlite.exe"
+    $sqliteBinary = "target\release\file-change-tracker.exe"
     if (Test-Path $sqliteBinary) {
         Copy-Item $sqliteBinary "$binDir\" -Force
-        Write-Host "   ✅ Installed: post-tool-use-tracker-sqlite.exe"
+        Write-Host "   ✅ Installed: file-change-tracker.exe"
     } else {
-        Write-Warning "SQLite binary not found: post-tool-use-tracker-sqlite.exe (expected at $sqliteBinary)"
+        Write-Warning "SQLite binary not found: file-change-tracker.exe (expected at $sqliteBinary)"
     }
 }
 

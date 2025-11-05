@@ -97,10 +97,10 @@ done
 
 # Copy SQLite binaries if built
 if [ "$BUILD_SQLITE" = true ]; then
-    if [ -f "target/release/post-tool-use-tracker-sqlite" ]; then
-        cp "target/release/post-tool-use-tracker-sqlite" "$BIN_DIR/"
-        chmod +x "$BIN_DIR/post-tool-use-tracker-sqlite"
-        echo "   ✅ Installed: post-tool-use-tracker-sqlite"
+    if [ -f "target/release/file-change-tracker" ]; then
+        cp "target/release/file-change-tracker" "$BIN_DIR/"
+        chmod +x "$BIN_DIR/file-change-tracker"
+        echo "   ✅ Installed: file-change-tracker"
     fi
 fi
 

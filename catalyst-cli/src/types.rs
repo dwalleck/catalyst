@@ -164,6 +164,12 @@ pub struct InitReport {
     pub warnings: Vec<String>,
 }
 
+impl Default for InitReport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InitReport {
     pub fn new() -> Self {
         Self {
@@ -201,6 +207,12 @@ pub struct UpdateReport {
 
     /// Any errors that occurred
     pub errors: Vec<String>,
+}
+
+impl Default for UpdateReport {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UpdateReport {
@@ -247,6 +259,12 @@ pub struct FixReport {
     pub success: bool,
 }
 
+impl Default for FixReport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FixReport {
     pub fn new() -> Self {
         Self {
@@ -280,6 +298,12 @@ pub struct StatusReport {
 
     /// Whether .catalyst-version exists and matches
     pub version_status: VersionStatus,
+}
+
+impl Default for StatusReport {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StatusReport {

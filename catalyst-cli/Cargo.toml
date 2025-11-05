@@ -46,11 +46,18 @@ aho-corasick = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 chrono = { workspace = true }
 
+# Phase 1 dependencies for catalyst CLI
+sha2 = { workspace = true }
+dialoguer = { workspace = true }
+indicatif = { workspace = true }
+include_dir = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+tempfile = { workspace = true }
+
 [dev-dependencies]
 # Pre-commit hooks (installs automatically on cargo build)
 cargo-husky = { workspace = true }
-# Temporary directories for testing (prevents race conditions)
-tempfile = "3.14"
 
 [features]
 default = []
@@ -71,14 +78,14 @@ name = "file-analyzer"
 path = "src/bin/file_analyzer.rs"
 
 [[bin]]
-name = "post-tool-use-tracker-sqlite"
-path = "src/bin/post_tool_use_tracker_sqlite.rs"
+name = "file-change-tracker"
+path = "src/bin/file_change_tracker.rs"
 required-features = ["sqlite"]
 
-# Phase 2.6: Settings management CLI tool
+# Unified Catalyst CLI tool (renamed from settings-manager in Phase 1)
 [[bin]]
-name = "settings-manager"
-path = "src/bin/settings_manager.rs"
+name = "catalyst"
+path = "src/bin/catalyst.rs"
 
 # Cargo check hook - runs cargo check on Rust file edits
 [[bin]]
