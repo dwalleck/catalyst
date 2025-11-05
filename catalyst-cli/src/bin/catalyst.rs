@@ -340,13 +340,49 @@ fn main() -> Result<()> {
             let target_dir =
                 path.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-            if use_color {
-                println!("{}", "⚠️  Not implemented yet".yellow().bold());
-            } else {
-                println!("⚠️  Not implemented yet");
+            // Detect platform
+            let platform = catalyst_cli::types::Platform::detect();
+
+            // Validate installation
+            match catalyst_cli::status::validate_installation(&target_dir, platform) {
+                Ok(report) => {
+                    // If --fix flag provided and there are auto-fixable issues, attempt fixes
+                    let mut fixed_issues = Vec::new();
+                    if fix && report.issues.iter().any(|i| i.auto_fixable) {
+                        match catalyst_cli::status::auto_fix(&target_dir, platform, &report) {
+                            Ok(fixes) => {
+                                fixed_issues = fixes;
+                            }
+                            Err(e) => {
+                                if use_color {
+                                    eprintln!(
+                                        "{}",
+                                        format!("❌ Auto-fix failed: {}", e).red().bold()
+                                    );
+                                } else {
+                                    eprintln!("❌ Auto-fix failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+
+                    // Display status report
+                    display_status_report(&report, use_color, &fixed_issues);
+
+                    // Exit with error code if status is not ok
+                    if report.level != catalyst_cli::types::StatusLevel::Ok {
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    if use_color {
+                        eprintln!("{}", format!("❌ Status check failed: {}", e).red().bold());
+                    } else {
+                        eprintln!("❌ Status check failed: {}", e);
+                    }
+                    std::process::exit(1);
+                }
             }
-            println!("Would check status: {:?}", target_dir);
-            println!("  Auto-fix: {}", fix);
         }
 
         Commands::Update { path, force } => {
@@ -545,4 +581,241 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Display a formatted status report
+fn display_status_report(
+    report: &catalyst_cli::types::StatusReport,
+    use_color: bool,
+    fixed_issues: &[String],
+) {
+    use catalyst_cli::types::{IssueSeverity, StatusLevel};
+
+    // Show fixed issues first if any
+    if !fixed_issues.is_empty() {
+        if use_color {
+            println!("\n{}", "🔧 Auto-Fix Results:".cyan().bold());
+        } else {
+            println!("\n🔧 Auto-Fix Results:");
+        }
+        for fix in fixed_issues {
+            if use_color {
+                println!("  {}", format!("✓ {}", fix).green());
+            } else {
+                println!("  ✓ {}", fix);
+            }
+        }
+        println!();
+    }
+
+    // Overall status header
+    let (status_icon, status_text) = match report.level {
+        StatusLevel::Ok => ("✅", "HEALTHY"),
+        StatusLevel::Warning => ("⚠️", "WARNING"),
+        StatusLevel::Error => ("❌", "ERROR"),
+    };
+
+    if use_color {
+        match report.level {
+            StatusLevel::Ok => {
+                println!(
+                    "{} {}",
+                    status_icon,
+                    format!("Catalyst Status: {}", status_text).green().bold()
+                );
+            }
+            StatusLevel::Warning => {
+                println!(
+                    "{} {}",
+                    status_icon,
+                    format!("Catalyst Status: {}", status_text).yellow().bold()
+                );
+            }
+            StatusLevel::Error => {
+                println!(
+                    "{} {}",
+                    status_icon,
+                    format!("Catalyst Status: {}", status_text).red().bold()
+                );
+            }
+        }
+    } else {
+        println!("{} Catalyst Status: {}", status_icon, status_text);
+    }
+    println!();
+
+    // Binaries section
+    if !report.binaries.is_empty() {
+        if use_color {
+            println!("{}", "Binaries:".cyan().bold());
+        } else {
+            println!("Binaries:");
+        }
+        for binary in &report.binaries {
+            let status_icon = if binary.exists && binary.executable {
+                "✓"
+            } else {
+                "✗"
+            };
+            let status_text = if binary.exists {
+                if binary.executable {
+                    "found"
+                } else {
+                    "not executable"
+                }
+            } else {
+                "not found"
+            };
+
+            let variant_text = if let Some(ref v) = binary.variant {
+                format!(" ({})", v)
+            } else {
+                String::new()
+            };
+
+            if use_color {
+                if binary.exists && binary.executable {
+                    println!(
+                        "  {} {}{}",
+                        status_icon,
+                        format!("{} ({})", binary.name, status_text).green(),
+                        variant_text
+                    );
+                } else {
+                    println!(
+                        "  {} {}{}",
+                        status_icon,
+                        format!("{} ({})", binary.name, status_text).red(),
+                        variant_text
+                    );
+                }
+            } else {
+                println!(
+                    "  {} {} ({}){}",
+                    status_icon, binary.name, status_text, variant_text
+                );
+            }
+        }
+        println!();
+    }
+
+    // Hooks section
+    if !report.hooks.is_empty() {
+        if use_color {
+            println!("{}", "Hooks:".cyan().bold());
+        } else {
+            println!("Hooks:");
+        }
+        for hook in &report.hooks {
+            let status_icon = if hook.exists && hook.executable && hook.calls_correct_binary {
+                "✓"
+            } else {
+                "✗"
+            };
+            let event = hook.event.as_deref().unwrap_or("unknown");
+
+            if use_color {
+                if hook.exists && hook.executable && hook.calls_correct_binary {
+                    println!("  {} {} → {}", status_icon, event.green(), hook.name);
+                } else {
+                    println!("  {} {} → {}", status_icon, event.red(), hook.name);
+                }
+            } else {
+                println!("  {} {} → {}", status_icon, event, hook.name);
+            }
+        }
+        println!();
+    }
+
+    // Skills section
+    if !report.skills.is_empty() {
+        if use_color {
+            println!("{}", "Skills:".cyan().bold());
+        } else {
+            println!("Skills:");
+        }
+        for skill in &report.skills {
+            let status_icon = if skill.has_main_file { "✓" } else { "✗" };
+            let status_text = if skill.has_main_file {
+                "installed"
+            } else {
+                "incomplete"
+            };
+
+            if use_color {
+                if skill.has_main_file {
+                    println!("  {} {} ({})", status_icon, skill.name.green(), status_text);
+                } else {
+                    println!("  {} {} ({})", status_icon, skill.name.red(), status_text);
+                }
+            } else {
+                println!("  {} {} ({})", status_icon, skill.name, status_text);
+            }
+        }
+        println!();
+    }
+
+    // Issues section
+    if !report.issues.is_empty() {
+        if use_color {
+            println!("{}", "Issues:".cyan().bold());
+        } else {
+            println!("Issues:");
+        }
+        for issue in &report.issues {
+            let severity_icon = match issue.severity {
+                IssueSeverity::Error => "❌",
+                IssueSeverity::Warning => "⚠️",
+                IssueSeverity::Info => "ℹ️",
+            };
+
+            if use_color {
+                let colored_desc = match issue.severity {
+                    IssueSeverity::Error => issue.description.red(),
+                    IssueSeverity::Warning => issue.description.yellow(),
+                    IssueSeverity::Info => issue.description.blue(),
+                };
+                println!("  {} [{}] {}", severity_icon, issue.component, colored_desc);
+            } else {
+                println!(
+                    "  {} [{}] {}",
+                    severity_icon, issue.component, issue.description
+                );
+            }
+
+            if let Some(ref fix) = issue.suggested_fix {
+                if use_color {
+                    println!("     {}", format!("→ {}", fix).cyan());
+                } else {
+                    println!("     → {}", fix);
+                }
+            }
+        }
+        println!();
+    } else {
+        if use_color {
+            println!("{}", "Issues: None".green());
+        } else {
+            println!("Issues: None");
+        }
+        println!();
+    }
+
+    // Final message
+    if report.level == StatusLevel::Ok {
+        if use_color {
+            println!("{}", "All systems operational! 🚀".green().bold());
+        } else {
+            println!("All systems operational! 🚀");
+        }
+    } else if report.issues.iter().any(|i| i.auto_fixable) && fixed_issues.is_empty() {
+        if use_color {
+            println!(
+                "{}",
+                "Run 'catalyst status --fix' to auto-repair fixable issues.".yellow()
+            );
+        } else {
+            println!("Run 'catalyst status --fix' to auto-repair fixable issues.");
+        }
+    }
 }

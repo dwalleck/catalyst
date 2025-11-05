@@ -91,7 +91,7 @@ pub fn detect_file_change_tracker_variant(
 }
 
 /// Get the binary installation directory
-fn get_binary_directory() -> Result<PathBuf> {
+pub fn get_binary_directory() -> Result<PathBuf> {
     let home = home_dir().ok_or_else(|| {
         CatalystError::InvalidPath("Could not determine home directory".to_string())
     })?;
@@ -102,7 +102,7 @@ fn get_binary_directory() -> Result<PathBuf> {
 /// Check if a binary exists in the given directory
 ///
 /// On Windows, this checks for both the name with and without .exe extension
-fn binary_exists(bin_dir: &Path, name: &str, platform: Platform) -> bool {
+pub fn binary_exists(bin_dir: &Path, name: &str, platform: Platform) -> bool {
     let binary_path = if platform == Platform::Windows {
         bin_dir.join(format!("{}.exe", name))
     } else {
