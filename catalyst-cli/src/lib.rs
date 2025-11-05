@@ -4,6 +4,7 @@
 //! for the Catalyst CLI tool.
 
 pub mod init;
+pub mod status;
 pub mod types;
 pub mod validation;
 
