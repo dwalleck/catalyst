@@ -23,6 +23,10 @@ const WRAPPER_TEMPLATE_PS1: &str = include_str!("../resources/wrapper-template.p
 /// Lock file name for concurrent init protection
 const LOCK_FILE: &str = ".catalyst.lock";
 
+/// EXDEV error code (cross-device link) on Unix systems
+#[cfg(unix)]
+const EXDEV: i32 = 18;
+
 /// Guard that automatically releases the lock when dropped
 ///
 /// # Lock Cleanup Guarantee
@@ -42,6 +46,32 @@ impl Drop for InitLock {
     fn drop(&mut self) {
         let _ = release_init_lock(&self.lock_file);
     }
+}
+
+/// Helper function to atomically create a lock file and write PID
+///
+/// # Arguments
+///
+/// * `lock_file` - Path to the lock file
+/// * `pid` - Process ID to write to the lock file
+///
+/// # Returns
+///
+/// Returns an `InitLock` guard or an I/O error
+fn try_create_lock_file(lock_file: &Path, pid: u32) -> Result<InitLock> {
+    use std::io::Write;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true) // Atomic check-and-create
+        .open(lock_file)
+        .map_err(CatalystError::Io)?;
+
+    write!(file, "{}", pid).map_err(CatalystError::Io)?;
+
+    Ok(InitLock {
+        lock_file: lock_file.to_path_buf(),
+    })
 }
 
 /// Acquire a lock to prevent concurrent init operations
@@ -67,23 +97,14 @@ pub fn acquire_init_lock(target_dir: &Path) -> Result<InitLock> {
 
     // Try to atomically create the lock file
     // This prevents TOCTOU race conditions
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true) // Atomic check-and-create (fails if file exists)
-        .open(&lock_file)
-    {
-        Ok(mut file) => {
-            // Successfully acquired lock - write our PID
-            use std::io::Write;
-            write!(file, "{}", current_pid).map_err(CatalystError::Io)?;
-            Ok(InitLock { lock_file })
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+    match try_create_lock_file(&lock_file, current_pid) {
+        Ok(lock) => Ok(lock),
+        Err(CatalystError::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // Lock file exists - check if it's stale
             let pid_str = fs::read_to_string(&lock_file).map_err(CatalystError::Io)?;
 
             match pid_str.trim().parse::<u32>() {
-                Ok(pid) if is_valid_pid(pid, current_pid) => {
+                Ok(pid) if is_valid_pid(pid) => {
                     // Valid PID - check if process is still running
                     if is_process_running(pid) {
                         Err(CatalystError::InitInProgress {
@@ -95,21 +116,7 @@ pub fn acquire_init_lock(target_dir: &Path) -> Result<InitLock> {
                         fs::remove_file(&lock_file).map_err(CatalystError::Io)?;
 
                         // Retry lock acquisition (non-recursive)
-                        match fs::OpenOptions::new()
-                            .write(true)
-                            .create_new(true)
-                            .open(&lock_file)
-                        {
-                            Ok(mut file) => {
-                                use std::io::Write;
-                                write!(file, "{}", current_pid).map_err(CatalystError::Io)?;
-                                Ok(InitLock { lock_file })
-                            }
-                            Err(e) => {
-                                // Another process acquired it between our remove and create
-                                Err(CatalystError::Io(e))
-                            }
-                        }
+                        try_create_lock_file(&lock_file, current_pid)
                     }
                 }
                 _ => {
@@ -117,22 +124,11 @@ pub fn acquire_init_lock(target_dir: &Path) -> Result<InitLock> {
                     fs::remove_file(&lock_file).map_err(CatalystError::Io)?;
 
                     // Retry lock acquisition
-                    match fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&lock_file)
-                    {
-                        Ok(mut file) => {
-                            use std::io::Write;
-                            write!(file, "{}", current_pid).map_err(CatalystError::Io)?;
-                            Ok(InitLock { lock_file })
-                        }
-                        Err(e) => Err(CatalystError::Io(e)),
-                    }
+                    try_create_lock_file(&lock_file, current_pid)
                 }
             }
         }
-        Err(e) => Err(CatalystError::Io(e)),
+        Err(e) => Err(e),
     }
 }
 
@@ -142,11 +138,11 @@ pub fn acquire_init_lock(target_dir: &Path) -> Result<InitLock> {
 /// - PID 0 (invalid)
 /// - PID 1 (system process, likely malicious lock file)
 ///
-/// Note: We intentionally DO check our own PID. If the lock file contains
+/// Note: We intentionally allow checking our own PID. If the lock file contains
 /// our PID, we'll check is_process_running() which will return true, causing
 /// the lock acquisition to fail with InitInProgress. This prevents the same
 /// process from acquiring the lock twice.
-fn is_valid_pid(pid: u32, _current_pid: u32) -> bool {
+fn is_valid_pid(pid: u32) -> bool {
     pid != 0 && pid != 1
 }
 
@@ -179,7 +175,9 @@ fn is_process_running(pid: u32) -> bool {
 
 #[cfg(windows)]
 fn is_process_running(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER,
+    };
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
     // Try to open the process with minimal access rights
@@ -192,9 +190,22 @@ fn is_process_running(pid: u32) -> bool {
             // Failed to open process - check why
             let error = GetLastError();
 
-            // ERROR_INVALID_PARAMETER (87) means the process doesn't exist
-            // Any other error (like ERROR_ACCESS_DENIED) means it exists but we can't access it
-            error != ERROR_INVALID_PARAMETER
+            // Explicitly handle known error cases:
+            // - ERROR_INVALID_PARAMETER (87): Process definitely doesn't exist
+            // - ERROR_ACCESS_DENIED (5): Process exists but is protected (system/elevated)
+            // - Other errors: Conservatively assume process exists to avoid stale lock cleanup race
+            //
+            // This conservative approach prevents accidentally cleaning up locks for
+            // running processes in edge cases (network errors, permission issues, etc.)
+            match error {
+                ERROR_INVALID_PARAMETER => false, // Process doesn't exist
+                ERROR_ACCESS_DENIED => true,      // Process exists but protected
+                _ => {
+                    // Unknown error - be conservative and assume process exists
+                    // This prevents false positives that could cause concurrent init
+                    true
+                }
+            }
         } else {
             // Successfully opened - process exists
             CloseHandle(handle);
@@ -428,8 +439,7 @@ fn try_atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
 fn is_cross_device_error(e: &std::io::Error) -> bool {
     #[cfg(unix)]
     {
-        // EXDEV is error code 18 on Unix systems
-        e.raw_os_error() == Some(18)
+        e.raw_os_error() == Some(EXDEV)
     }
 
     #[cfg(not(unix))]
