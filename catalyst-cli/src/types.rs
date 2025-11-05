@@ -20,17 +20,29 @@ pub enum CatalystError {
     #[error("Path not found: {0}")]
     PathNotFound(PathBuf),
 
+    #[error("Invalid path: {0}")]
+    InvalidPath(String),
+
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 
     #[error("Binary not found: {0}")]
     BinaryNotFound(String),
 
+    #[error("Required binaries not installed. Please run: {install_command}\n\nMissing: {missing_binaries}")]
+    BinariesNotInstalled {
+        install_command: String,
+        missing_binaries: String,
+    },
+
     #[error("Hook installation failed: {0}")]
     HookInstallationFailed(String),
 
     #[error("Skill installation failed: {0}")]
     SkillInstallationFailed(String),
+
+    #[error("Initialization already in progress (PID {pid}). If this is stale, remove the lock file at: {lock_file}")]
+    InitInProgress { pid: u32, lock_file: String },
 
     #[error("Unsupported platform: {0}")]
     UnsupportedPlatform(String),
@@ -40,6 +52,9 @@ pub enum CatalystError {
 
     #[error("Version mismatch: expected {expected}, found {found}")]
     VersionMismatch { expected: String, found: String },
+
+    #[error("Path traversal detected: {0}")]
+    PathTraversalDetected(String),
 }
 
 pub type Result<T> = std::result::Result<T, CatalystError>;
@@ -50,24 +65,34 @@ pub type Result<T> = std::result::Result<T, CatalystError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Platform {
-    Unix,    // Linux and macOS
+    Linux,
+    MacOS,
     Windows,
+    WSL, // Windows Subsystem for Linux
 }
 
 impl Platform {
     /// Detects the current platform
     pub fn detect() -> Self {
-        if cfg!(windows) {
+        // Check for WSL first (via WSL_DISTRO_NAME environment variable)
+        if std::env::var("WSL_DISTRO_NAME").is_ok() {
+            return Platform::WSL;
+        }
+
+        // Then check for native platforms
+        if cfg!(target_os = "windows") {
             Platform::Windows
+        } else if cfg!(target_os = "macos") {
+            Platform::MacOS
         } else {
-            Platform::Unix
+            Platform::Linux
         }
     }
 
     /// Returns the appropriate hook file extension for the platform
     pub fn hook_extension(&self) -> &'static str {
         match self {
-            Platform::Unix => "sh",
+            Platform::Linux | Platform::MacOS | Platform::WSL => "sh",
             Platform::Windows => "ps1",
         }
     }
@@ -75,7 +100,7 @@ impl Platform {
     /// Returns the shebang line for hook scripts
     pub fn hook_shebang(&self) -> Option<&'static str> {
         match self {
-            Platform::Unix => Some("#!/bin/bash"),
+            Platform::Linux | Platform::MacOS | Platform::WSL => Some("#!/bin/bash"),
             Platform::Windows => None, // PowerShell doesn't use shebangs
         }
     }
@@ -304,6 +329,10 @@ pub struct BinaryStatus {
 
     /// Full path to binary
     pub path: Option<PathBuf>,
+
+    /// Variant of the binary (for file-change-tracker: "sqlite" or "basic")
+    /// None for binaries that don't have variants
+    pub variant: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

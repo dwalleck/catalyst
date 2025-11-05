@@ -44,7 +44,7 @@ aho-corasick = { workspace = true, optional = true }
 
 # SQLite feature dependencies
 rusqlite = { workspace = true, optional = true }
-chrono = { workspace = true, optional = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 # Pre-commit hooks (installs automatically on cargo build)
@@ -54,7 +54,7 @@ tempfile = "3.14"
 
 [features]
 default = []
-sqlite = ["dep:rusqlite", "dep:chrono"]
+sqlite = ["dep:rusqlite"]
 # Reserved for future performance enhancements
 # parallel - Will enable parallel file processing with rayon
 # fast-patterns - Will enable multi-pattern string matching with aho-corasick
