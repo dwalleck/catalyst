@@ -29,6 +29,9 @@
 //! ```
 
 use anyhow::Result;
+use catalyst_cli::init;
+use catalyst_cli::types::InitConfig;
+use catalyst_cli::validation::check_binaries_installed;
 use catalyst_core::settings::*;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
@@ -64,14 +67,6 @@ enum Commands {
         /// Install all available skills
         #[arg(long)]
         all: bool,
-
-        /// Install backend development skills
-        #[arg(long)]
-        backend: bool,
-
-        /// Install frontend development skills
-        #[arg(long)]
-        frontend: bool,
     },
 
     /// Validate installation and report issues
@@ -191,23 +186,141 @@ fn main() -> Result<()> {
             interactive,
             force,
             all,
-            backend,
-            frontend,
         } => {
             let target_dir =
                 path.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-            if use_color {
-                println!("{}", "⚠️  Not implemented yet".yellow().bold());
-            } else {
-                println!("⚠️  Not implemented yet");
+            // Check if binaries are installed
+            let platform = catalyst_cli::types::Platform::detect();
+            if let Err(e) = check_binaries_installed(platform) {
+                if use_color {
+                    eprintln!("{}", format!("❌ {}", e).red().bold());
+                } else {
+                    eprintln!("❌ {}", e);
+                }
+                std::process::exit(1);
             }
-            println!("Would initialize: {:?}", target_dir);
-            println!("  Interactive: {}", interactive);
-            println!("  Force: {}", force);
-            println!("  All skills: {}", all);
-            println!("  Backend: {}", backend);
-            println!("  Frontend: {}", frontend);
+
+            // Build skill list based on flags
+            let mut skills = Vec::new();
+            if all {
+                skills.extend_from_slice(catalyst_cli::types::AVAILABLE_SKILLS);
+            } else {
+                // Default: install skill-developer
+                // TODO Phase 3: Implement skill selection logic
+                skills.push("skill-developer");
+            }
+
+            // Build config
+            let config = InitConfig {
+                directory: target_dir.clone(),
+                install_hooks: true,   // Always install hooks
+                install_tracker: true, // Always install tracker
+                skills: skills.iter().map(|s| s.to_string()).collect(),
+                force,
+            };
+
+            // Handle interactive mode
+            if interactive {
+                if use_color {
+                    println!("{}", "🔧 Interactive mode not yet implemented".yellow());
+                } else {
+                    println!("🔧 Interactive mode not yet implemented");
+                }
+                println!("Proceeding with default configuration...\n");
+            }
+
+            // Run initialization
+            if use_color {
+                println!("{}", "🚀 Initializing Catalyst...".cyan().bold());
+            } else {
+                println!("🚀 Initializing Catalyst...");
+            }
+            println!();
+
+            match init::initialize(&config) {
+                Ok(report) => {
+                    // Display success report
+                    if use_color {
+                        println!("{}", "━".repeat(60).bright_cyan());
+                        println!("{}", "✅ Catalyst initialized successfully!".green().bold());
+                        println!("{}", "━".repeat(60).bright_cyan());
+                    } else {
+                        println!("{}", "=".repeat(60));
+                        println!("✅ Catalyst initialized successfully!");
+                        println!("{}", "=".repeat(60));
+                    }
+                    println!();
+
+                    // Created directories
+                    if !report.created_dirs.is_empty() {
+                        if use_color {
+                            println!("{}", "Created directories:".cyan().bold());
+                        } else {
+                            println!("Created directories:");
+                        }
+                        for dir in &report.created_dirs {
+                            println!("  ✓ {}", dir);
+                        }
+                        println!();
+                    }
+
+                    // Installed hooks
+                    if !report.installed_hooks.is_empty() {
+                        if use_color {
+                            println!("{}", "Installed hooks:".cyan().bold());
+                        } else {
+                            println!("Installed hooks:");
+                        }
+                        for hook in &report.installed_hooks {
+                            println!("  ✓ {}", hook);
+                        }
+                        println!();
+                    }
+
+                    // Settings file
+                    if report.settings_created {
+                        if use_color {
+                            println!("{}", "Configuration:".cyan().bold());
+                        } else {
+                            println!("Configuration:");
+                        }
+                        println!("  ✓ .claude/settings.json");
+                        println!();
+                    }
+
+                    // Next steps
+                    if use_color {
+                        println!("{}", "Next steps:".yellow().bold());
+                    } else {
+                        println!("Next steps:");
+                    }
+                    println!("  1. Review .claude/settings.json");
+                    println!("  2. Try editing a file - hooks should activate automatically");
+                    println!("  3. Run 'catalyst status' to validate setup");
+                    println!();
+
+                    if use_color {
+                        println!(
+                            "{}",
+                            "📖 Documentation: https://github.com/dwalleck/catalyst".bright_blue()
+                        );
+                    } else {
+                        println!("📖 Documentation: https://github.com/dwalleck/catalyst");
+                    }
+                }
+                Err(e) => {
+                    if use_color {
+                        eprintln!(
+                            "{}",
+                            format!("❌ Initialization failed: {}", e).red().bold()
+                        );
+                    } else {
+                        eprintln!("❌ Initialization failed: {}", e);
+                    }
+                    std::process::exit(1);
+                }
+            }
         }
 
         Commands::Status { path, fix } => {
