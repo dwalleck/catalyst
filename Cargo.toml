@@ -46,6 +46,15 @@ aho-corasick = "1.1"        # Multi-pattern string matching (optional feature)
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = "0.4"
 
+# Catalyst CLI dependencies (Phase 1)
+sha2 = "0.10"                   # SHA256 hashing for skill change detection
+dialoguer = "0.11"              # Interactive prompts
+indicatif = "0.17"              # Progress bars
+include_dir = "0.7"             # Embed skills at compile time
+dirs = "5.0"                    # Cross-platform home directory
+dunce = "1.0"                   # Canonicalize paths (Windows UNC fix)
+tempfile = "3.14"               # Atomic file writes
+
 # Pre-commit hooks (installs automatically on cargo build)
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 
