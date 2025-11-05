@@ -267,10 +267,16 @@ fn main() -> Result<()> {
                     let (mut settings, file_existed) = match ClaudeSettings::read(&path) {
                         Ok(s) => (s, true),
                         Err(e) => {
-                            // Check if it's a "file not found" error
-                            if e.to_string().contains("No such file or directory")
-                                || e.to_string().contains("cannot find the path")
-                            {
+                            // Check if the underlying error is io::ErrorKind::NotFound
+                            // Use downcast_ref to check the root cause
+                            let is_not_found = e.chain().any(|cause| {
+                                cause
+                                    .downcast_ref::<std::io::Error>()
+                                    .map(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+                                    .unwrap_or(false)
+                            });
+
+                            if is_not_found {
                                 (ClaudeSettings::default(), false)
                             } else {
                                 // Propagate other errors (permissions, invalid JSON, etc.)

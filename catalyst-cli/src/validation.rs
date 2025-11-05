@@ -57,18 +57,32 @@ pub fn check_binaries_installed(platform: Platform) -> Result<Vec<String>> {
 /// - Some("sqlite") if the SQLite version is found
 /// - Some("basic") if the basic version is found
 /// - None if neither is found
+///
+/// # Current Limitations (Phase 1)
+///
+/// Currently assumes any file-change-tracker binary is the SQLite variant
+/// since that's the only variant we build with the new name. This is acceptable
+/// for Phase 1 because:
+/// - The basic variant hasn't been implemented yet
+/// - install.sh only builds the SQLite variant with --sqlite flag
+/// - Users who have the binary are guaranteed to have the SQLite version
+///
+/// # Future Enhancement
+///
+/// TODO: Implement --version flag detection to distinguish variants accurately
+/// when basic variant is added in future phases.
 pub fn detect_file_change_tracker_variant(
     bin_dir: &Path,
     platform: Platform,
 ) -> Result<Option<String>> {
-    // Try to find file-change-tracker binary (renamed from post-tool-use-tracker-sqlite)
+    // Check for new binary name (Phase 1+)
     if binary_exists(bin_dir, "file-change-tracker", platform) {
-        // For now, if the binary exists, assume it's the SQLite variant
-        // In the future, we could run the binary with --version to determine variant
+        // Phase 1: Assume SQLite variant (only variant available)
+        // This is safe because install.sh --sqlite is the only way to get this binary
         return Ok(Some("sqlite".to_string()));
     }
 
-    // Check for legacy name
+    // Check for legacy name (pre-Phase 1 installations)
     if binary_exists(bin_dir, "post-tool-use-tracker-sqlite", platform) {
         return Ok(Some("sqlite-legacy".to_string()));
     }
