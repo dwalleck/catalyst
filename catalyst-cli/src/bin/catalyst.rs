@@ -67,14 +67,6 @@ enum Commands {
         /// Install all available skills
         #[arg(long)]
         all: bool,
-
-        /// Install backend development skills
-        #[arg(long)]
-        backend: bool,
-
-        /// Install frontend development skills
-        #[arg(long)]
-        frontend: bool,
     },
 
     /// Validate installation and report issues
@@ -194,8 +186,6 @@ fn main() -> Result<()> {
             interactive,
             force,
             all,
-            backend: _,
-            frontend: _,
         } => {
             let target_dir =
                 path.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -216,8 +206,8 @@ fn main() -> Result<()> {
             if all {
                 skills.extend_from_slice(catalyst_cli::types::AVAILABLE_SKILLS);
             } else {
-                // TODO: Add specific skills based on backend/frontend flags
-                // For now, just use skill-developer as default
+                // Default: install skill-developer
+                // TODO Phase 3: Implement skill selection logic
                 skills.push("skill-developer");
             }
 

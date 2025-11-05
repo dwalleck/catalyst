@@ -34,5 +34,5 @@ if [ ! -f "$BINARY_PATH" ]; then
     exit 1
 fi
 
-# Execute the binary, piping stdin through it
-cat | "$BINARY_PATH"
+# Execute the binary with stdin
+"$BINARY_PATH"

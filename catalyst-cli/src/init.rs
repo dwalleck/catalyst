@@ -36,7 +36,7 @@ impl Drop for InitLock {
 
 /// Acquire a lock to prevent concurrent init operations
 ///
-/// Creates a .catalyst.lock file with the current process ID.
+/// Creates a .catalyst.lock file with the current process ID using atomic file creation.
 /// Returns an error if a lock already exists and the process is still running.
 ///
 /// # Arguments
@@ -46,33 +46,98 @@ impl Drop for InitLock {
 /// # Returns
 ///
 /// Returns an `InitLock` guard that will automatically release the lock when dropped
+///
+/// # Concurrency Safety
+///
+/// Uses atomic file creation (O_EXCL on Unix, CREATE_NEW on Windows) to prevent
+/// race conditions where two processes might both acquire the lock.
 pub fn acquire_init_lock(target_dir: &Path) -> Result<InitLock> {
     let lock_file = target_dir.join(LOCK_FILE);
+    let current_pid = process::id();
 
-    // Check if lock file exists
-    if lock_file.exists() {
-        // Read the PID from the lock file
-        let pid_str = fs::read_to_string(&lock_file).map_err(CatalystError::Io)?;
+    // Try to atomically create the lock file
+    // This prevents TOCTOU race conditions
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true) // Atomic check-and-create (fails if file exists)
+        .open(&lock_file)
+    {
+        Ok(mut file) => {
+            // Successfully acquired lock - write our PID
+            use std::io::Write;
+            write!(file, "{}", current_pid).map_err(CatalystError::Io)?;
+            Ok(InitLock { lock_file })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Lock file exists - check if it's stale
+            let pid_str = fs::read_to_string(&lock_file).map_err(CatalystError::Io)?;
 
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            // Check if the process is still running
-            if is_process_running(pid) {
-                return Err(CatalystError::InitInProgress {
-                    pid,
-                    lock_file: lock_file.display().to_string(),
-                });
-            } else {
-                // Stale lock file - remove it
-                fs::remove_file(&lock_file).map_err(CatalystError::Io)?;
+            match pid_str.trim().parse::<u32>() {
+                Ok(pid) if is_valid_pid(pid, current_pid) => {
+                    // Valid PID - check if process is still running
+                    if is_process_running(pid) {
+                        Err(CatalystError::InitInProgress {
+                            pid,
+                            lock_file: lock_file.display().to_string(),
+                        })
+                    } else {
+                        // Stale lock file - remove and retry once
+                        fs::remove_file(&lock_file).map_err(CatalystError::Io)?;
+
+                        // Retry lock acquisition (non-recursive)
+                        match fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&lock_file)
+                        {
+                            Ok(mut file) => {
+                                use std::io::Write;
+                                write!(file, "{}", current_pid).map_err(CatalystError::Io)?;
+                                Ok(InitLock { lock_file })
+                            }
+                            Err(e) => {
+                                // Another process acquired it between our remove and create
+                                Err(CatalystError::Io(e))
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // Invalid PID (0, 1, current, or parse error) - treat as stale
+                    fs::remove_file(&lock_file).map_err(CatalystError::Io)?;
+
+                    // Retry lock acquisition
+                    match fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&lock_file)
+                    {
+                        Ok(mut file) => {
+                            use std::io::Write;
+                            write!(file, "{}", current_pid).map_err(CatalystError::Io)?;
+                            Ok(InitLock { lock_file })
+                        }
+                        Err(e) => Err(CatalystError::Io(e)),
+                    }
+                }
             }
         }
+        Err(e) => Err(CatalystError::Io(e)),
     }
+}
 
-    // Create lock file with current PID
-    let pid = process::id();
-    fs::write(&lock_file, pid.to_string()).map_err(CatalystError::Io)?;
-
-    Ok(InitLock { lock_file })
+/// Validate that a PID is reasonable
+///
+/// Returns false for:
+/// - PID 0 (invalid)
+/// - PID 1 (system process, likely malicious lock file)
+///
+/// Note: We intentionally DO check our own PID. If the lock file contains
+/// our PID, we'll check is_process_running() which will return true, causing
+/// the lock acquisition to fail with InitInProgress. This prevents the same
+/// process from acquiring the lock twice.
+fn is_valid_pid(pid: u32, _current_pid: u32) -> bool {
+    pid != 0 && pid != 1
 }
 
 /// Release the init lock
