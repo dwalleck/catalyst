@@ -3,6 +3,7 @@
 //! Core library providing types, validation, and helper functions
 //! for the Catalyst CLI tool.
 
+pub mod init;
 pub mod types;
 pub mod validation;
 
