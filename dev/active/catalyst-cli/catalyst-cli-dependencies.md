@@ -311,7 +311,39 @@ All dependencies are MIT or MIT/Apache-2.0 dual-licensed, compatible with this p
 | `dunce` 1.0 | 1.56+ | ✅ Compatible |
 | `tempfile` 3.14 | 1.63+ | ⚠️ Requires bump if needed |
 
-**Recommendation:** Bump workspace MSRV to 1.63+ (Rust 2022 Q4) to support `dialoguer` and `indicatif`.
+**Recommendation:** Bump workspace MSRV to 1.63+ (Rust 2022 Q4) to support `dialoguer`, `indicatif`, and `tempfile`.
+
+### MSRV Decision Required in Phase 1
+
+**Current State:**
+- Workspace specifies edition = "2021" (minimum Rust 1.56+)
+- Three new dependencies require Rust 1.63+: dialoguer, indicatif, tempfile
+
+**Decision Point (Phase 1, Task 1.1):**
+
+Option 1: **Bump to 1.63+ (Recommended)**
+- ✅ Allows all dependencies
+- ✅ Still relatively conservative (Oct 2022 release)
+- ✅ Matches modern Rust practices
+- ⚠️ May impact users on older systems
+
+Option 2: **Stay at 1.56+**
+- ❌ Must find alternatives to dialoguer/indicatif
+- ❌ Removes interactive mode (Phase 5)
+- ❌ Reduces UX quality
+
+**Recommendation**: Bump to 1.63+ in Phase 1 and document in README.
+
+**CI Requirement**: Add MSRV check to CI:
+```yaml
+# .github/workflows/ci.yml
+jobs:
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dtolnay/rust-toolchain@1.63
+      - run: cargo check --all-features
+```
 
 ---
 

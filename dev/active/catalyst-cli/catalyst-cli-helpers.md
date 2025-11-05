@@ -575,6 +575,107 @@ if !is_valid_sha256(&stored_hash) {
 
 ---
 
+### validate_skill_id()
+
+**Purpose:** Validate skill ID format to prevent directory traversal and injection attacks.
+
+**Signature:**
+```rust
+fn validate_skill_id(skill_id: &str) -> Result<(), CatalystError>
+```
+
+**Implementation:**
+
+```
+FUNCTION validate_skill_id(skill_id: &str) -> Result<()>
+    // Pattern: lowercase letters, digits, hyphens only
+    // Examples: "skill-developer", "backend-dev-guidelines", "route-tester"
+
+    // 1. Check not empty
+    IF skill_id.is_empty() THEN
+        RETURN Err(CatalystError::InvalidPath {
+            path: PathBuf::from(skill_id),
+            reason: "Skill ID cannot be empty".to_string()
+        })
+    END IF
+
+    // 2. Check length (prevent extremely long IDs)
+    IF skill_id.len() > 100 THEN
+        RETURN Err(CatalystError::InvalidPath {
+            path: PathBuf::from(skill_id),
+            reason: "Skill ID too long (max 100 characters)".to_string()
+        })
+    END IF
+
+    // 3. Validate pattern: ^[a-z0-9-]+$
+    FOR each char IN skill_id.chars()
+        IF NOT (char.is_ascii_lowercase() OR char.is_ascii_digit() OR char == '-') THEN
+            RETURN Err(CatalystError::InvalidPath {
+                path: PathBuf::from(skill_id),
+                reason: format!("Invalid character '{}' in skill ID. Only lowercase letters, digits, and hyphens allowed.", char)
+            })
+        END IF
+    END FOR
+
+    // 4. Additional checks
+    IF skill_id.starts_with('-') OR skill_id.ends_with('-') THEN
+        RETURN Err(CatalystError::InvalidPath {
+            path: PathBuf::from(skill_id),
+            reason: "Skill ID cannot start or end with hyphen".to_string()
+        })
+    END IF
+
+    RETURN Ok(())
+END FUNCTION
+```
+
+**Security Rationale:**
+
+Restricting skill IDs to `^[a-z0-9-]+$` prevents multiple attack vectors:
+
+| Attack | Example | Prevention |
+|--------|---------|-----------|
+| Directory traversal | `../../../etc` | `/` and `.` not allowed |
+| Absolute paths | `/etc/passwd` | `/` not allowed |
+| Shell injection | `skill; rm -rf /` | `;` and spaces not allowed |
+| Windows paths | `C:\Windows` | `\` and `:` not allowed |
+| Hidden files | `.hidden-skill` | Leading `.` rejected (starts with hyphen rule) |
+| Unicode confusion | `skill‐dev` (unicode hyphen) | Only ASCII allowed |
+
+**Valid Examples:**
+```rust
+validate_skill_id("skill-developer")           // ✅ Ok
+validate_skill_id("backend-dev-guidelines")    // ✅ Ok
+validate_skill_id("route-tester")              // ✅ Ok
+validate_skill_id("error-tracking")            // ✅ Ok
+validate_skill_id("my-custom-skill-123")       // ✅ Ok
+```
+
+**Invalid Examples:**
+```rust
+validate_skill_id("../malicious")              // ❌ Contains /
+validate_skill_id("/etc/passwd")               // ❌ Contains /
+validate_skill_id("Skill-Developer")           // ❌ Uppercase not allowed
+validate_skill_id("skill;rm -rf")              // ❌ Contains ; and space
+validate_skill_id("skill_name")                // ❌ Underscore not allowed
+validate_skill_id("-skill")                    // ❌ Starts with hyphen
+validate_skill_id("skill-")                    // ❌ Ends with hyphen
+validate_skill_id("")                          // ❌ Empty
+```
+
+**Usage in Init:**
+```rust
+// Validate all skill IDs before installation
+for skill_id in &config.skills {
+    validate_skill_id(skill_id)?;
+}
+
+// Now safe to use in paths
+let skill_dir = base_dir.join(".claude/skills").join(skill_id);
+```
+
+---
+
 ## Path Manipulation Helpers
 
 ### validate_skill_path()
@@ -945,6 +1046,7 @@ let wrapper_content = substitute_template_vars(template, &vars);
 | `hash_file()` | SHA256 hash | `String` | No |
 | `validate_json_file()` | Parse JSON | `Value` | No |
 | `is_valid_sha256()` | Validate hash format | `bool` | No |
+| `validate_skill_id()` | Validate skill ID format | `Result<()>` | No (security) |
 | `validate_skill_path()` | Path traversal prevention | `Result<()>` | No (security) |
 | `to_forward_slashes()` | Normalize path | `String` | No |
 | `canonicalize_path()` | Resolve symlinks | `PathBuf` | Yes (Windows UNC) |

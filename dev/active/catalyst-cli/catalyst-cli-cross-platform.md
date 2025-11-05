@@ -452,6 +452,21 @@ FUNCTION is_process_running(pid: u32) -> bool
 END FUNCTION
 ```
 
+**Implementation Recommendation (From Code Review):**
+
+For **MVP simplicity**, use the `sysinfo` crate implementation for ALL platforms instead of three separate implementations:
+
+**Rationale:**
+- ✅ **Simpler**: One implementation vs three
+- ✅ **Maintainable**: No unsafe code, no platform-specific APIs
+- ✅ **Portable**: Works on Linux/macOS/Windows/WSL
+- ✅ **Sufficient**: Lock file check is advisory, not critical path
+- ⚠️ **Dependency**: Adds sysinfo crate (~150KB binary size)
+
+**Future Optimization**: If performance becomes an issue (unlikely for init), can optimize to platform-specific implementations in later phases.
+
+**Decision Point**: Phase 1 implementation should start with sysinfo only, optimize later if needed.
+
 ### Edge Cases
 
 | Scenario | Handling |
@@ -806,6 +821,158 @@ jobs:
     steps:
       - run: export WSL_DISTRO_NAME=Ubuntu && cargo test
 ```
+
+### Additional Test Recommendations (From Code Review)
+
+Beyond the standard test scenarios, these specific tests ensure robustness:
+
+#### 1. Concurrent Init Test
+**Purpose**: Verify lock file prevents race conditions
+
+```rust
+#[test]
+fn test_concurrent_init_protection() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    // Spawn two init processes simultaneously
+    let handle1 = thread::spawn(|| {
+        run_init(&temp_dir, InitConfig::default())
+    });
+
+    let handle2 = thread::spawn(|| {
+        run_init(&temp_dir, InitConfig::default())
+    });
+
+    let result1 = handle1.join().unwrap();
+    let result2 = handle2.join().unwrap();
+
+    // One should succeed, one should fail with InitInProgress
+    assert!(
+        (result1.is_ok() && result2.is_err()) ||
+        (result1.is_err() && result2.is_ok())
+    );
+}
+```
+
+#### 2. Atomic Write Fallback Test
+**Purpose**: Verify graceful degradation on network filesystems
+
+```rust
+#[test]
+fn test_atomic_write_fallback() {
+    // Mock EXDEV error by using different mount points
+    // (Hard to simulate in unit test - integration test needed)
+
+    // Alternative: Test that fallback_write works
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("test.json");
+
+    // Force fallback by simulating cross-device error
+    let result = write_file_atomic(&file_path, b"test content");
+
+    assert!(result.is_ok());
+    assert_eq!(fs::read_to_string(&file_path).unwrap(), "test content");
+}
+```
+
+#### 3. PowerShell Template Validation Test
+**Purpose**: Ensure PowerShell wrappers have no shebang and use @args
+
+```rust
+#[test]
+fn test_powershell_template_no_shebang() {
+    let template = load_wrapper_template(&Platform::Windows);
+
+    // ✅ No shebang
+    assert!(!template.starts_with("#!"));
+
+    // ✅ Uses @args for argument splatting
+    assert!(template.contains("@args"));
+
+    // ✅ Uses $LASTEXITCODE
+    assert!(template.contains("$LASTEXITCODE"));
+
+    // ✅ Uses $input for stdin
+    assert!(template.contains("$input"));
+}
+```
+
+#### 4. Schema Validation Tests
+**Purpose**: Ensure all example files are valid
+
+```rust
+#[test]
+fn test_all_schema_examples_valid() {
+    // Test settings.json examples
+    let settings_unix = include_str!("../../docs/schemas/settings.json.example");
+    assert!(serde_json::from_str::<Value>(settings_unix).is_ok());
+
+    let settings_windows = include_str!("../../docs/schemas/settings-windows.json.example");
+    assert!(serde_json::from_str::<Value>(settings_windows).is_ok());
+
+    // Test skill-rules.json example
+    let skill_rules = include_str!("../../docs/schemas/skill-rules.json.example");
+    assert!(serde_json::from_str::<Value>(skill_rules).is_ok());
+
+    // Test .catalyst-hashes.json example
+    let hashes = include_str!("../../docs/schemas/.catalyst-hashes.json.example");
+    let parsed: HashMap<String, String> = serde_json::from_str(hashes).unwrap();
+
+    // All hashes should be valid SHA256
+    for hash in parsed.values() {
+        assert!(is_valid_sha256(hash));
+    }
+
+    // Test .catalyst-version example
+    let version = include_str!("../../docs/schemas/.catalyst-version.example").trim();
+    assert!(version.matches('.').count() == 2); // Semver: X.Y.Z
+}
+```
+
+#### 5. Skill ID Validation Test
+**Purpose**: Ensure security constraints enforced
+
+```rust
+#[test]
+fn test_skill_id_validation() {
+    // ✅ Valid IDs
+    assert!(validate_skill_id("skill-developer").is_ok());
+    assert!(validate_skill_id("backend-dev-guidelines").is_ok());
+    assert!(validate_skill_id("my-skill-123").is_ok());
+
+    // ❌ Invalid IDs (security)
+    assert!(validate_skill_id("../malicious").is_err());
+    assert!(validate_skill_id("/etc/passwd").is_err());
+    assert!(validate_skill_id("skill; rm -rf /").is_err());
+    assert!(validate_skill_id("Skill-Name").is_err()); // Uppercase
+    assert!(validate_skill_id("skill_name").is_err()); // Underscore
+    assert!(validate_skill_id("-skill").is_err()); // Starts with hyphen
+    assert!(validate_skill_id("skill-").is_err()); // Ends with hyphen
+    assert!(validate_skill_id("").is_err()); // Empty
+}
+```
+
+#### 6. Permission Handling Tests
+**Purpose**: Verify behavior on read-only filesystems
+
+```rust
+#[test]
+#[cfg(unix)]
+fn test_init_on_readonly_filesystem() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    // Make directory read-only
+    let mut permissions = fs::metadata(temp_dir.path()).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(temp_dir.path(), permissions).unwrap();
+
+    // Init should fail with PermissionDenied
+    let result = run_init(temp_dir.path(), InitConfig::default());
+    assert!(matches!(result, Err(CatalystError::PermissionDenied { .. })));
+}
+```
+
+**Note**: These tests should be added in Phase 8 (Testing) as part of comprehensive test coverage.
 
 ---
 

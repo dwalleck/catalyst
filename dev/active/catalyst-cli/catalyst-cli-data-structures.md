@@ -48,6 +48,10 @@ Each structure includes:
 **Validation Rules:**
 - `skills` must not be empty
 - Each skill ID in `skills` must exist in embedded resources
+- **Security:** Each skill ID must match pattern `^[a-z0-9-]+$` (lowercase letters, digits, hyphens only)
+  - Prevents directory traversal: `../malicious` → ❌ Rejected
+  - Prevents absolute paths: `/etc/passwd` → ❌ Rejected
+  - Prevents special characters: `skill; rm -rf /` → ❌ Rejected
 - If `install_hooks` is `false`, warn user that skills won't auto-activate
 
 **Example Instances:**
