@@ -43,7 +43,7 @@ pub fn check_binaries_installed(platform: Platform) -> Result<Vec<String>> {
 
     if !missing.is_empty() {
         return Err(CatalystError::BinariesNotInstalled {
-            install_command: get_install_command(&missing),
+            install_command: get_install_command(&missing, platform),
             missing_binaries: missing.join(", "),
         });
     }
@@ -98,16 +98,26 @@ fn binary_exists(bin_dir: &Path, name: &str, platform: Platform) -> bool {
     binary_path.exists() && binary_path.is_file()
 }
 
-/// Generate the appropriate install command based on what's missing
-fn get_install_command(missing: &[String]) -> String {
+/// Generate the appropriate install command based on what's missing and the platform
+fn get_install_command(missing: &[String], platform: Platform) -> String {
     let has_tracker = missing.iter().any(|m| m.contains("file-change-tracker"));
 
-    if has_tracker {
-        // User needs SQLite support
-        "cd catalyst && ./install.sh --sqlite".to_string()
-    } else {
-        // Core binaries only
-        "cd catalyst && ./install.sh".to_string()
+    match platform {
+        Platform::Windows => {
+            if has_tracker {
+                ".\\install.ps1 -Sqlite".to_string()
+            } else {
+                ".\\install.ps1".to_string()
+            }
+        }
+        _ => {
+            // Linux, MacOS, WSL all use bash script
+            if has_tracker {
+                "cd catalyst && ./install.sh --sqlite".to_string()
+            } else {
+                "cd catalyst && ./install.sh".to_string()
+            }
+        }
     }
 }
 
@@ -128,14 +138,87 @@ mod tests {
     #[test]
     fn test_get_install_command_with_tracker() {
         let missing = vec!["file-change-tracker (sqlite or basic)".to_string()];
-        let cmd = get_install_command(&missing);
+        let cmd = get_install_command(&missing, Platform::Linux);
         assert!(cmd.contains("--sqlite"));
     }
 
     #[test]
     fn test_get_install_command_without_tracker() {
         let missing = vec!["skill-activation-prompt".to_string()];
-        let cmd = get_install_command(&missing);
+        let cmd = get_install_command(&missing, Platform::Linux);
         assert!(!cmd.contains("--sqlite"));
+    }
+
+    #[test]
+    fn test_get_install_command_windows() {
+        let missing = vec!["skill-activation-prompt".to_string()];
+        let cmd = get_install_command(&missing, Platform::Windows);
+        assert!(cmd.contains(".ps1"));
+        assert!(!cmd.contains(".sh"));
+    }
+
+    #[test]
+    fn test_get_install_command_windows_with_sqlite() {
+        let missing = vec!["file-change-tracker (sqlite or basic)".to_string()];
+        let cmd = get_install_command(&missing, Platform::Windows);
+        assert!(cmd.contains(".ps1"));
+        assert!(cmd.contains("-Sqlite"));
+    }
+
+    #[test]
+    fn test_detect_variant_returns_none_when_missing() {
+        use std::path::Path;
+        // Use a path that definitely doesn't exist
+        let nonexistent_dir = Path::new("/nonexistent/path/to/binaries");
+        let result = detect_file_change_tracker_variant(nonexistent_dir, Platform::Linux);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_check_binaries_returns_error_with_missing_list() {
+        // This test validates that check_binaries_installed properly reports
+        // missing binaries through the error type
+        let platform = Platform::Linux;
+        let result = check_binaries_installed(platform);
+
+        // Should fail because ~/.claude-hooks/bin likely doesn't have all binaries
+        // or might not exist at all
+        match result {
+            Err(CatalystError::BinariesNotInstalled {
+                install_command,
+                missing_binaries,
+            }) => {
+                // Verify error contains useful information
+                assert!(!install_command.is_empty());
+                assert!(!missing_binaries.is_empty());
+                assert!(install_command.contains("install"));
+            }
+            Ok(_) => {
+                // If binaries are actually installed, that's fine too
+                // This happens in CI or when running tests after installation
+            }
+            Err(e) => {
+                panic!("Unexpected error type: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_platform_specific_commands() {
+        // Test that different platforms get appropriate commands
+        let missing = vec!["skill-activation-prompt".to_string()];
+
+        let linux_cmd = get_install_command(&missing, Platform::Linux);
+        assert!(linux_cmd.contains(".sh"));
+
+        let macos_cmd = get_install_command(&missing, Platform::MacOS);
+        assert!(macos_cmd.contains(".sh"));
+
+        let wsl_cmd = get_install_command(&missing, Platform::WSL);
+        assert!(wsl_cmd.contains(".sh"));
+
+        let windows_cmd = get_install_command(&missing, Platform::Windows);
+        assert!(windows_cmd.contains(".ps1"));
     }
 }

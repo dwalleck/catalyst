@@ -262,10 +262,21 @@ fn main() -> Result<()> {
                     matcher,
                     dry_run,
                 } => {
-                    // Load existing settings or create new (check Result to avoid TOCTOU race)
+                    // Load existing settings or create new
+                    // Only create defaults for missing files, not for other errors (permissions, invalid JSON, etc.)
                     let (mut settings, file_existed) = match ClaudeSettings::read(&path) {
                         Ok(s) => (s, true),
-                        Err(_) => (ClaudeSettings::default(), false),
+                        Err(e) => {
+                            // Check if it's a "file not found" error
+                            if e.to_string().contains("No such file or directory")
+                                || e.to_string().contains("cannot find the path")
+                            {
+                                (ClaudeSettings::default(), false)
+                            } else {
+                                // Propagate other errors (permissions, invalid JSON, etc.)
+                                return Err(e);
+                            }
+                        }
                     };
 
                     // Parse event string into HookEvent enum
