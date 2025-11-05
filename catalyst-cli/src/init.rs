@@ -24,6 +24,16 @@ const WRAPPER_TEMPLATE_PS1: &str = include_str!("../resources/wrapper-template.p
 const LOCK_FILE: &str = ".catalyst.lock";
 
 /// Guard that automatically releases the lock when dropped
+///
+/// # Lock Cleanup Guarantee
+///
+/// The lock is **automatically released** when this guard is dropped, even if
+/// initialization fails or panics. This RAII pattern ensures that:
+/// - Lock files are never leaked on normal program exit
+/// - Subsequent initialization attempts can proceed after errors
+/// - No manual cleanup is required in error handling paths
+///
+/// The Drop trait makes lock cleanup exception-safe and foolproof.
 pub struct InitLock {
     lock_file: PathBuf,
 }
@@ -375,6 +385,7 @@ pub fn write_file_atomic(path: &Path, content: &str) -> Result<bool> {
             if is_cross_device_error(&e) || is_temp_creation_error(&e) {
                 // Fall back to regular write
                 eprintln!("⚠️  Atomic write not supported on this filesystem");
+                eprintln!("   Reason: {}", e);
                 eprintln!("   Falling back to regular write for: {}", path.display());
 
                 fs::write(path, content).map_err(CatalystError::Io)?;
@@ -656,6 +667,54 @@ mod tests {
         // Should remove stale lock and succeed
         let lock = acquire_init_lock(target);
         assert!(lock.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_pid_lock_cleanup() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+        let lock_file = target.join(LOCK_FILE);
+
+        // Test invalid PID 0 (reserved system PID)
+        fs::write(&lock_file, "0").unwrap();
+        let lock = acquire_init_lock(target);
+        assert!(lock.is_ok(), "Should clean up lock file with PID 0");
+        drop(lock);
+
+        // Test invalid PID 1 (init process PID)
+        fs::write(&lock_file, "1").unwrap();
+        let lock = acquire_init_lock(target);
+        assert!(lock.is_ok(), "Should clean up lock file with PID 1");
+    }
+
+    #[test]
+    fn test_malformed_lock_cleanup() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+        let lock_file = target.join(LOCK_FILE);
+
+        // Test non-numeric content
+        fs::write(&lock_file, "not-a-number").unwrap();
+        let lock = acquire_init_lock(target);
+        assert!(
+            lock.is_ok(),
+            "Should clean up lock file with invalid content"
+        );
+        drop(lock);
+
+        // Test empty lock file
+        fs::write(&lock_file, "").unwrap();
+        let lock = acquire_init_lock(target);
+        assert!(lock.is_ok(), "Should clean up empty lock file");
+        drop(lock);
+
+        // Test lock file with whitespace
+        fs::write(&lock_file, "   \n\t  ").unwrap();
+        let lock = acquire_init_lock(target);
+        assert!(
+            lock.is_ok(),
+            "Should clean up lock file with only whitespace"
+        );
     }
 
     #[test]
