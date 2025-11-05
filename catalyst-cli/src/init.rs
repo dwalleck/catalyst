@@ -7,6 +7,9 @@ use crate::types::{
     CatalystError, InitConfig, InitReport, Platform, Result, AGENTS_DIR, CLAUDE_DIR, COMMANDS_DIR,
     HOOKS_DIR, SKILLS_DIR,
 };
+use include_dir::{include_dir, Dir};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -19,6 +22,9 @@ use std::os::unix::fs::PermissionsExt;
 // Embed wrapper templates at compile time
 const WRAPPER_TEMPLATE_SH: &str = include_str!("../resources/wrapper-template.sh");
 const WRAPPER_TEMPLATE_PS1: &str = include_str!("../resources/wrapper-template.ps1");
+
+// Embed skills directory at compile time
+static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../.claude/skills");
 
 /// Lock file name for concurrent init protection
 const LOCK_FILE: &str = ".catalyst.lock";
@@ -556,6 +562,245 @@ pub fn create_settings_json(
     Ok(true)
 }
 
+/// Install skills from embedded resources
+///
+/// Extracts skills from the embedded SKILLS directory and installs them
+/// to the target `.claude/skills/` directory.
+///
+/// # Arguments
+///
+/// * `target_dir` - Base directory where .claude exists
+/// * `skill_ids` - List of skill IDs to install
+/// * `force` - Whether to overwrite existing skill directories
+///
+/// # Returns
+///
+/// Returns a list of successfully installed skill IDs
+pub fn install_skills(target_dir: &Path, skill_ids: &[String], force: bool) -> Result<Vec<String>> {
+    let mut installed = Vec::new();
+
+    for skill_id in skill_ids {
+        match install_skill(target_dir, skill_id, force) {
+            Ok(()) => installed.push(skill_id.clone()),
+            Err(e) => {
+                eprintln!("⚠️  Failed to install skill '{}': {}", skill_id, e);
+            }
+        }
+    }
+
+    Ok(installed)
+}
+
+/// Install a single skill from embedded resources
+///
+/// # Arguments
+///
+/// * `target_dir` - Base directory where .claude exists
+/// * `skill_id` - The skill ID to install
+/// * `force` - Whether to overwrite existing skill directory
+fn install_skill(target_dir: &Path, skill_id: &str, force: bool) -> Result<()> {
+    let skills_dir = target_dir.join(SKILLS_DIR);
+    let skill_target = skills_dir.join(skill_id);
+
+    // Check if skill directory already exists
+    if skill_target.exists() && !force {
+        return Err(CatalystError::InvalidPath(format!(
+            "Skill directory already exists: {}\nUse --force to overwrite.",
+            skill_target.display()
+        )));
+    }
+
+    // Find the skill in embedded resources
+    let skill_dir = SKILLS
+        .get_dir(skill_id)
+        .ok_or_else(|| CatalystError::InvalidPath(format!("Skill not found: {}", skill_id)))?;
+
+    // Create skill directory
+    fs::create_dir_all(&skill_target).map_err(CatalystError::Io)?;
+
+    // Copy all files recursively
+    copy_dir_recursive(skill_dir, &skill_target)?;
+
+    // Set permissions on Unix
+    #[cfg(unix)]
+    {
+        let permissions = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&skill_target, permissions).map_err(CatalystError::Io)?;
+    }
+
+    Ok(())
+}
+
+/// Recursively copy directory contents from embedded resources
+fn copy_dir_recursive(source: &include_dir::Dir, target: &Path) -> Result<()> {
+    // Copy all files in this directory
+    for file in source.files() {
+        let file_path = target.join(file.path().file_name().unwrap());
+        fs::write(&file_path, file.contents()).map_err(CatalystError::Io)?;
+
+        // Set executable permission on Unix if needed
+        #[cfg(unix)]
+        {
+            let permissions = fs::Permissions::from_mode(0o644);
+            fs::set_permissions(&file_path, permissions).map_err(CatalystError::Io)?;
+        }
+    }
+
+    // Recursively copy subdirectories
+    for subdir in source.dirs() {
+        let subdir_path = target.join(subdir.path().file_name().unwrap());
+        fs::create_dir_all(&subdir_path).map_err(CatalystError::Io)?;
+        copy_dir_recursive(subdir, &subdir_path)?;
+    }
+
+    Ok(())
+}
+
+/// Generate skill-rules.json for installed skills
+///
+/// Creates the skill-rules.json file with activation rules for each installed skill.
+///
+/// # Arguments
+///
+/// * `target_dir` - Base directory where .claude exists
+/// * `installed_skills` - List of skill IDs that were installed
+pub fn generate_skill_rules(target_dir: &Path, installed_skills: &[String]) -> Result<()> {
+    let skill_rules_path = target_dir.join(SKILLS_DIR).join("skill-rules.json");
+
+    let mut rules = serde_json::json!({
+        "version": "1.0",
+        "skills": {}
+    });
+
+    let skills_obj = rules["skills"].as_object_mut().unwrap();
+
+    for skill_id in installed_skills {
+        let (keywords, intent_patterns, path_patterns) = get_skill_patterns(skill_id);
+
+        skills_obj.insert(
+            skill_id.clone(),
+            serde_json::json!({
+                "type": "skill",
+                "enforcement": "suggest",
+                "priority": 1,
+                "keywords": keywords,
+                "intentPatterns": intent_patterns,
+                "pathPatterns": path_patterns,
+                "enabled": true
+            }),
+        );
+    }
+
+    // Pretty-print JSON with comment
+    let mut content = String::from("// Customize pathPatterns for your project structure\n");
+    content.push_str(&serde_json::to_string_pretty(&rules).map_err(CatalystError::Json)?);
+
+    // Write atomically
+    write_file_atomic(&skill_rules_path, &content)?;
+
+    Ok(())
+}
+
+/// Get skill-specific patterns (keywords, intent, and path patterns)
+fn get_skill_patterns(skill_id: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+    match skill_id {
+        "frontend-dev-guidelines" => (
+            vec!["frontend".to_string(), "react".to_string()],
+            vec![
+                "frontend development".to_string(),
+                "react component".to_string(),
+            ],
+            vec!["**/*.{ts,tsx,js,jsx,vue,svelte}".to_string()],
+        ),
+        "backend-dev-guidelines" => (
+            vec!["backend".to_string(), "api".to_string()],
+            vec![
+                "backend development".to_string(),
+                "api endpoint".to_string(),
+            ],
+            vec!["**/*.{ts,js}".to_string(), "src/routes/**/*".to_string()],
+        ),
+        "rust-developer" => (
+            vec!["rust".to_string()],
+            vec!["rust development".to_string()],
+            vec!["**/*.rs".to_string(), "Cargo.toml".to_string()],
+        ),
+        _ => (
+            vec![skill_id.to_string()],
+            vec![format!("{} skill", skill_id)],
+            vec![
+                "src/**/*".to_string(),
+                "lib/**/*".to_string(),
+                "app/**/*".to_string(),
+                "tests/**/*".to_string(),
+            ],
+        ),
+    }
+}
+
+/// Compute SHA256 hash of a file
+fn hash_file(file_path: &Path) -> Result<String> {
+    let contents = fs::read(file_path).map_err(CatalystError::Io)?;
+    let hash = Sha256::digest(&contents);
+    Ok(format!("{:x}", hash))
+}
+
+/// Generate .catalyst-hashes.json for tracking file modifications
+///
+/// Computes SHA256 hashes for all installed skill files and stores them
+/// in .catalyst-hashes.json for modification detection during updates.
+///
+/// # Arguments
+///
+/// * `target_dir` - Base directory where .claude exists
+/// * `installed_skills` - List of skill IDs that were installed
+pub fn generate_skill_hashes(target_dir: &Path, installed_skills: &[String]) -> Result<()> {
+    let hashes_path = target_dir.join(SKILLS_DIR).join(".catalyst-hashes.json");
+    let skills_dir = target_dir.join(SKILLS_DIR);
+
+    let mut hashes: HashMap<String, String> = HashMap::new();
+
+    for skill_id in installed_skills {
+        let skill_path = skills_dir.join(skill_id);
+        collect_file_hashes(&skill_path, &mut hashes)?;
+    }
+
+    // Pretty-print JSON
+    let content = serde_json::to_string_pretty(&hashes).map_err(CatalystError::Json)?;
+
+    // Write atomically
+    write_file_atomic(&hashes_path, &content)?;
+
+    Ok(())
+}
+
+/// Recursively collect hashes for all files in a directory
+fn collect_file_hashes(dir_path: &Path, hashes: &mut HashMap<String, String>) -> Result<()> {
+    if !dir_path.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(dir_path).map_err(CatalystError::Io)? {
+        let entry = entry.map_err(CatalystError::Io)?;
+        let path = entry.path();
+
+        if path.is_file() {
+            let relative_path = path
+                .strip_prefix(dir_path.parent().unwrap())
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+
+            let hash = hash_file(&path)?;
+            hashes.insert(relative_path, hash);
+        } else if path.is_dir() {
+            collect_file_hashes(&path, hashes)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Initialize a Claude Code project
 ///
 /// This is the main entry point for the `catalyst init` command.
@@ -595,6 +840,20 @@ pub fn initialize(config: &InitConfig) -> Result<InitReport> {
         platform,
     )?;
     report.settings_created = settings_created;
+
+    // Phase 3.1-3.2: Install skills
+    if !config.skills.is_empty() {
+        let installed_skills = install_skills(&config.directory, &config.skills, config.force)?;
+        report.installed_skills = installed_skills.clone();
+
+        // Phase 3.3: Generate skill-rules.json
+        if !installed_skills.is_empty() {
+            generate_skill_rules(&config.directory, &installed_skills)?;
+
+            // Phase 3.4: Generate .catalyst-hashes.json
+            generate_skill_hashes(&config.directory, &installed_skills)?;
+        }
+    }
 
     Ok(report)
 }
@@ -1025,5 +1284,123 @@ mod tests {
 
         // Verify settings.json exists
         assert!(target.join(".claude/settings.json").exists());
+    }
+
+    #[test]
+    fn test_install_skill() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create .claude/skills directory
+        fs::create_dir_all(target.join(".claude/skills")).unwrap();
+
+        // Install skill-developer skill
+        let result = install_skill(target, "skill-developer", false);
+        assert!(result.is_ok());
+
+        // Verify skill directory exists
+        let skill_path = target.join(".claude/skills/skill-developer");
+        assert!(skill_path.is_dir());
+
+        // Verify SKILL.md exists
+        assert!(skill_path.join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn test_install_skills_multiple() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create .claude/skills directory
+        fs::create_dir_all(target.join(".claude/skills")).unwrap();
+
+        // Install multiple skills
+        let skills = vec!["skill-developer".to_string(), "rust-developer".to_string()];
+        let installed = install_skills(target, &skills, false).unwrap();
+
+        assert_eq!(installed.len(), 2);
+        assert!(target
+            .join(".claude/skills/skill-developer/SKILL.md")
+            .exists());
+        assert!(target
+            .join(".claude/skills/rust-developer/SKILL.md")
+            .exists());
+    }
+
+    #[test]
+    fn test_generate_skill_rules() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create .claude/skills directory
+        fs::create_dir_all(target.join(".claude/skills")).unwrap();
+
+        // Generate skill rules
+        let skills = vec!["skill-developer".to_string(), "rust-developer".to_string()];
+        let result = generate_skill_rules(target, &skills);
+        assert!(result.is_ok());
+
+        // Verify skill-rules.json exists
+        let rules_path = target.join(".claude/skills/skill-rules.json");
+        assert!(rules_path.exists());
+
+        // Parse and verify JSON structure
+        let content = fs::read_to_string(&rules_path).unwrap();
+        assert!(content.contains("// Customize pathPatterns"));
+        assert!(content.contains("skill-developer"));
+        assert!(content.contains("rust-developer"));
+
+        // Verify it's valid JSON
+        let json_start = content.find('{').unwrap();
+        let json_content = &content[json_start..];
+        let parsed: serde_json::Value = serde_json::from_str(json_content).unwrap();
+        assert_eq!(parsed["version"], "1.0");
+        assert!(parsed["skills"]["skill-developer"].is_object());
+        assert!(parsed["skills"]["rust-developer"].is_object());
+    }
+
+    #[test]
+    fn test_hash_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+
+        // Write test content
+        fs::write(&test_file, "Hello, World!").unwrap();
+
+        // Compute hash
+        let hash = hash_file(&test_file).unwrap();
+
+        // Verify hash is non-empty and has expected length (SHA256 = 64 hex chars)
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_generate_skill_hashes() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create skill directories with files
+        fs::create_dir_all(target.join(".claude/skills/skill-developer")).unwrap();
+        fs::write(
+            target.join(".claude/skills/skill-developer/SKILL.md"),
+            "# Test Skill",
+        )
+        .unwrap();
+
+        // Generate hashes
+        let skills = vec!["skill-developer".to_string()];
+        let result = generate_skill_hashes(target, &skills);
+        assert!(result.is_ok());
+
+        // Verify .catalyst-hashes.json exists
+        let hashes_path = target.join(".claude/skills/.catalyst-hashes.json");
+        assert!(hashes_path.exists());
+
+        // Parse and verify JSON
+        let content = fs::read_to_string(&hashes_path).unwrap();
+        let hashes: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(hashes.is_object());
+        assert!(!hashes.as_object().unwrap().is_empty());
     }
 }

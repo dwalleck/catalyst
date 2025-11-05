@@ -278,6 +278,19 @@ fn main() -> Result<()> {
                         println!();
                     }
 
+                    // Installed skills
+                    if !report.installed_skills.is_empty() {
+                        if use_color {
+                            println!("{}", "Installed skills:".cyan().bold());
+                        } else {
+                            println!("Installed skills:");
+                        }
+                        for skill in &report.installed_skills {
+                            println!("  ✓ {}", skill);
+                        }
+                        println!();
+                    }
+
                     // Settings file
                     if report.settings_created {
                         if use_color {
