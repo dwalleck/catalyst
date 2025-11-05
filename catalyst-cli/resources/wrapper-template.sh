@@ -16,6 +16,8 @@ if [ ! -f "$BINARY_PATH" ]; then
     fi
 
     # If still not found, try relative to this script
+    # NOTE: This fallback is primarily for Catalyst development/testing
+    # Production users should have binaries in ~/.claude-hooks/bin/
     if [ ! -f "$BINARY_PATH" ]; then
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

@@ -13,6 +13,8 @@ if (-not (Test-Path $BinaryPath)) {
     }
 
     # If still not found, try relative to this script
+    # NOTE: This fallback is primarily for Catalyst development/testing
+    # Production users should have binaries in %USERPROFILE%\.claude-hooks\bin\
     if (-not (Test-Path $BinaryPath)) {
         $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
         $ProjectRoot = Resolve-Path (Join-Path $ScriptDir "..\..")

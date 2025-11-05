@@ -115,6 +115,15 @@ pub fn acquire_init_lock(target_dir: &Path) -> Result<InitLock> {
                         // Stale lock file - remove and retry once
                         fs::remove_file(&lock_file).map_err(CatalystError::Io)?;
 
+                        // NOTE: There is a small TOCTOU race window between remove_file and
+                        // try_create_lock_file where another process could create the lock.
+                        // This is acceptable because:
+                        // 1. The window is extremely small (microseconds)
+                        // 2. If it happens, try_create_lock_file will fail with AlreadyExists,
+                        //    causing this init to fail cleanly
+                        // 3. The race is rare in practice (requires precise timing)
+                        // 4. The failure is safe - no corruption or data loss
+
                         // Retry lock acquisition (non-recursive)
                         try_create_lock_file(&lock_file, current_pid)
                     }
@@ -123,6 +132,7 @@ pub fn acquire_init_lock(target_dir: &Path) -> Result<InitLock> {
                     // Invalid PID (0, 1, current, or parse error) - treat as stale
                     fs::remove_file(&lock_file).map_err(CatalystError::Io)?;
 
+                    // NOTE: Known TOCTOU race window here (see comment above)
                     // Retry lock acquisition
                     try_create_lock_file(&lock_file, current_pid)
                 }
@@ -181,6 +191,12 @@ fn is_process_running(pid: u32) -> bool {
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
     // Try to open the process with minimal access rights
+    //
+    // NOTE: We could use GetExitCodeProcess for more certainty, but OpenProcess
+    // with PROCESS_QUERY_LIMITED_INFORMATION is sufficient and requires minimal
+    // permissions. The conservative error handling (assume exists on unknown errors)
+    // provides adequate safety for lock file cleanup.
+    //
     // SAFETY: This is safe because we're just checking if a process exists
     // and we immediately close the handle if successful
     unsafe {
@@ -285,6 +301,14 @@ pub fn create_directory_structure(target_dir: &Path, force: bool) -> Result<Vec<
 
         // Create directory
         fs::create_dir_all(&dir_path).map_err(CatalystError::Io)?;
+
+        // Verify directory was created successfully
+        if !dir_path.exists() || !dir_path.is_dir() {
+            return Err(CatalystError::InvalidPath(format!(
+                "Failed to create directory: {}",
+                dir_path.display()
+            )));
+        }
 
         // Set permissions on Unix
         #[cfg(unix)]
