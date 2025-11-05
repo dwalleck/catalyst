@@ -8,10 +8,11 @@ use crate::types::{
     CLAUDE_DIR, COMMANDS_DIR, HOOKS_DIR, SKILLS_DIR,
 };
 use include_dir::{include_dir, Dir};
+use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use tempfile::NamedTempFile;
@@ -579,13 +580,56 @@ pub fn create_settings_json(
 pub fn install_skills(target_dir: &Path, skill_ids: &[String], force: bool) -> Result<Vec<String>> {
     let mut installed = Vec::new();
 
+    // Skip progress bar if no skills to install
+    if skill_ids.is_empty() {
+        return Ok(installed);
+    }
+
+    // Only show progress bar if stdout is a terminal
+    let use_progress = io::stdout().is_terminal();
+
+    let pb = if use_progress {
+        let pb = ProgressBar::new(skill_ids.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .unwrap()
+                .progress_chars("━━╸"),
+        );
+        Some(pb)
+    } else {
+        None
+    };
+
     for skill_id in skill_ids {
+        if let Some(ref pb) = pb {
+            pb.set_message(format!("Installing {}...", skill_id));
+        }
+
         match install_skill(target_dir, skill_id, force) {
-            Ok(()) => installed.push(skill_id.clone()),
+            Ok(()) => {
+                installed.push(skill_id.clone());
+                if pb.is_none() {
+                    // If no progress bar, print messages directly
+                    println!("  ✓ Installed {}", skill_id);
+                }
+            }
             Err(e) => {
                 eprintln!("⚠️  Failed to install skill '{}': {}", skill_id, e);
             }
         }
+
+        if let Some(ref pb) = pb {
+            pb.inc(1);
+        }
+    }
+
+    if let Some(ref pb) = pb {
+        pb.finish_with_message(format!(
+            "✅ Installed {} skill{}",
+            installed.len(),
+            if installed.len() == 1 { "" } else { "s" }
+        ));
     }
 
     Ok(installed)
