@@ -55,6 +55,10 @@ dirs = { workspace = true }
 dunce = { workspace = true }
 tempfile = { workspace = true }
 
+# Windows-specific dependencies for process checking
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [dev-dependencies]
 # Pre-commit hooks (installs automatically on cargo build)
 cargo-husky = { workspace = true }

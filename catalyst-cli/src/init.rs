@@ -88,7 +88,7 @@ fn release_init_lock(lock_file: &Path) -> Result<()> {
 /// # Platform-specific behavior
 ///
 /// - **Unix/Linux/macOS**: Uses `kill -0 pid` to check if process exists
-/// - **Windows**: Always returns `false` (conservative approach - lock file will be stale)
+/// - **Windows**: Uses OpenProcess to check if process exists
 #[cfg(unix)]
 fn is_process_running(pid: u32) -> bool {
     use std::process::Command;
@@ -103,11 +103,29 @@ fn is_process_running(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn is_process_running(_pid: u32) -> bool {
-    // On Windows, we conservatively assume the process might be running
-    // This is safe because the user can manually remove the lock file if stale
-    // TODO: Implement Windows process check using tasklist or WMI
-    false
+fn is_process_running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    // Try to open the process with minimal access rights
+    // SAFETY: This is safe because we're just checking if a process exists
+    // and we immediately close the handle if successful
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+
+        if handle == 0 {
+            // Failed to open process - check why
+            let error = GetLastError();
+
+            // ERROR_INVALID_PARAMETER (87) means the process doesn't exist
+            // Any other error (like ERROR_ACCESS_DENIED) means it exists but we can't access it
+            error != ERROR_INVALID_PARAMETER
+        } else {
+            // Successfully opened - process exists
+            CloseHandle(handle);
+            true
+        }
+    }
 }
 
 /// Create the .claude subdirectory structure
