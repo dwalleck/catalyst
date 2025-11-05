@@ -543,6 +543,7 @@ pub const AVAILABLE_SKILLS: &[&str] = &[
     "frontend-dev-guidelines",
     "route-tester",
     "error-tracking",
+    "rust-developer",
 ];
 
 /// Default directory structure
