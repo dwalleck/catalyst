@@ -160,7 +160,14 @@ fn validate_hooks(target_dir: &Path, platform: Platform) -> Result<Vec<HookStatu
     }
 
     // Parse settings.json
-    let settings = match ClaudeSettings::read(settings_path.to_str().unwrap()) {
+    let settings_path_str = settings_path.to_str().ok_or_else(|| {
+        CatalystError::InvalidPath(format!(
+            "Settings path contains non-UTF-8 characters: {:?}",
+            settings_path
+        ))
+    })?;
+
+    let settings = match ClaudeSettings::read(settings_path_str) {
         Ok(s) => s,
         Err(_) => {
             // Invalid settings.json - report with issue
@@ -522,6 +529,18 @@ fn fix_hook_wrapper(target_dir: &Path, wrapper_name: &str, platform: Platform) -
         .trim_end_matches(".sh")
         .trim_end_matches(".ps1");
 
+    // Validate binary name to prevent potential injection
+    // Only allow alphanumeric characters, hyphens, and underscores
+    if !binary_name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(CatalystError::InvalidConfig(format!(
+            "Invalid binary name '{}': must contain only alphanumeric characters, hyphens, and underscores",
+            binary_name
+        )));
+    }
+
     // Use the init module's wrapper generation
     // For now, we'll just recreate the wrapper using the same logic
     let hooks_dir = target_dir.join(HOOKS_DIR);
@@ -535,7 +554,7 @@ fn fix_hook_wrapper(target_dir: &Path, wrapper_name: &str, platform: Platform) -
         Platform::Windows => include_str!("../resources/wrapper-template.ps1"),
     };
 
-    // Replace template variable
+    // Replace template variable (safe after validation above)
     let content = template.replace("{{BINARY_NAME}}", binary_name);
 
     // Write wrapper file
@@ -630,5 +649,37 @@ mod tests {
 
         let content = fs::read_to_string(&version_path).unwrap();
         assert_eq!(content.trim(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn test_fix_hook_wrapper_validates_binary_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let hooks_dir = temp_dir.path().join(".claude/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+
+        // Valid binary names should work
+        let result = fix_hook_wrapper(
+            temp_dir.path(),
+            "skill-activation-prompt.sh",
+            Platform::Linux,
+        );
+        assert!(result.is_ok());
+
+        let result = fix_hook_wrapper(temp_dir.path(), "file-change-tracker.sh", Platform::Linux);
+        assert!(result.is_ok());
+
+        // Invalid binary names should be rejected
+        let result = fix_hook_wrapper(temp_dir.path(), "test;rm-rf.sh", Platform::Linux);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid binary name"));
+
+        let result = fix_hook_wrapper(temp_dir.path(), "test$command.sh", Platform::Linux);
+        assert!(result.is_err());
+
+        let result = fix_hook_wrapper(temp_dir.path(), "test/../etc/passwd.sh", Platform::Linux);
+        assert!(result.is_err());
     }
 }
