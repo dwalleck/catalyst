@@ -4,8 +4,8 @@
 //! directory structure, installs hooks, and sets up skills.
 
 use crate::types::{
-    CatalystError, InitConfig, InitReport, Platform, Result, AGENTS_DIR, CLAUDE_DIR, COMMANDS_DIR,
-    HOOKS_DIR, SKILLS_DIR,
+    CatalystError, InitConfig, InitReport, Platform, Result, AGENTS_DIR, AVAILABLE_SKILLS,
+    CLAUDE_DIR, COMMANDS_DIR, HOOKS_DIR, SKILLS_DIR,
 };
 use include_dir::{include_dir, Dir};
 use sha2::{Digest, Sha256};
@@ -599,6 +599,15 @@ pub fn install_skills(target_dir: &Path, skill_ids: &[String], force: bool) -> R
 /// * `skill_id` - The skill ID to install
 /// * `force` - Whether to overwrite existing skill directory
 fn install_skill(target_dir: &Path, skill_id: &str, force: bool) -> Result<()> {
+    // Validate skill ID against available skills
+    if !AVAILABLE_SKILLS.contains(&skill_id) {
+        return Err(CatalystError::InvalidConfig(format!(
+            "Invalid skill ID: '{}'. Available skills: {}",
+            skill_id,
+            AVAILABLE_SKILLS.join(", ")
+        )));
+    }
+
     let skills_dir = target_dir.join(SKILLS_DIR);
     let skill_target = skills_dir.join(skill_id);
 
@@ -635,7 +644,10 @@ fn install_skill(target_dir: &Path, skill_id: &str, force: bool) -> Result<()> {
 fn copy_dir_recursive(source: &include_dir::Dir, target: &Path) -> Result<()> {
     // Copy all files in this directory
     for file in source.files() {
-        let file_path = target.join(file.path().file_name().unwrap());
+        let file_name = file.path().file_name().ok_or_else(|| {
+            CatalystError::InvalidPath(format!("Invalid file path: {:?}", file.path()))
+        })?;
+        let file_path = target.join(file_name);
         fs::write(&file_path, file.contents()).map_err(CatalystError::Io)?;
 
         // Set executable permission on Unix if needed
@@ -648,7 +660,10 @@ fn copy_dir_recursive(source: &include_dir::Dir, target: &Path) -> Result<()> {
 
     // Recursively copy subdirectories
     for subdir in source.dirs() {
-        let subdir_path = target.join(subdir.path().file_name().unwrap());
+        let subdir_name = subdir.path().file_name().ok_or_else(|| {
+            CatalystError::InvalidPath(format!("Invalid directory path: {:?}", subdir.path()))
+        })?;
+        let subdir_path = target.join(subdir_name);
         fs::create_dir_all(&subdir_path).map_err(CatalystError::Io)?;
         copy_dir_recursive(subdir, &subdir_path)?;
     }
@@ -672,7 +687,12 @@ pub fn generate_skill_rules(target_dir: &Path, installed_skills: &[String]) -> R
         "skills": {}
     });
 
-    let skills_obj = rules["skills"].as_object_mut().unwrap();
+    let skills_obj = rules
+        .get_mut("skills")
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| {
+            CatalystError::InvalidConfig("Failed to access skills object in JSON".to_string())
+        })?;
 
     for skill_id in installed_skills {
         let (keywords, intent_patterns, path_patterns) = get_skill_patterns(skill_id);
@@ -762,7 +782,7 @@ pub fn generate_skill_hashes(target_dir: &Path, installed_skills: &[String]) -> 
 
     for skill_id in installed_skills {
         let skill_path = skills_dir.join(skill_id);
-        collect_file_hashes(&skill_path, &mut hashes)?;
+        collect_file_hashes(&skills_dir, &skill_path, &mut hashes)?;
     }
 
     // Pretty-print JSON
@@ -775,26 +795,43 @@ pub fn generate_skill_hashes(target_dir: &Path, installed_skills: &[String]) -> 
 }
 
 /// Recursively collect hashes for all files in a directory
-fn collect_file_hashes(dir_path: &Path, hashes: &mut HashMap<String, String>) -> Result<()> {
-    if !dir_path.is_dir() {
+///
+/// # Arguments
+///
+/// * `base_dir` - Base directory for computing relative paths (e.g., .claude/skills)
+/// * `current_dir` - Current directory being traversed
+/// * `hashes` - HashMap to store file path -> hash mappings
+fn collect_file_hashes(
+    base_dir: &Path,
+    current_dir: &Path,
+    hashes: &mut HashMap<String, String>,
+) -> Result<()> {
+    if !current_dir.is_dir() {
         return Ok(());
     }
 
-    for entry in fs::read_dir(dir_path).map_err(CatalystError::Io)? {
+    for entry in fs::read_dir(current_dir).map_err(CatalystError::Io)? {
         let entry = entry.map_err(CatalystError::Io)?;
         let path = entry.path();
 
         if path.is_file() {
+            // Compute relative path from base_dir, with proper error handling
             let relative_path = path
-                .strip_prefix(dir_path.parent().unwrap())
-                .unwrap()
+                .strip_prefix(base_dir)
+                .map_err(|_| {
+                    CatalystError::PathTraversalDetected(format!(
+                        "Path {} is not within base directory {}",
+                        path.display(),
+                        base_dir.display()
+                    ))
+                })?
                 .to_string_lossy()
                 .to_string();
 
             let hash = hash_file(&path)?;
             hashes.insert(relative_path, hash);
         } else if path.is_dir() {
-            collect_file_hashes(&path, hashes)?;
+            collect_file_hashes(base_dir, &path, hashes)?;
         }
     }
 
@@ -846,12 +883,20 @@ pub fn initialize(config: &InitConfig) -> Result<InitReport> {
         let installed_skills = install_skills(&config.directory, &config.skills, config.force)?;
         report.installed_skills = installed_skills.clone();
 
-        // Phase 3.3: Generate skill-rules.json
+        // Phase 3.3: Generate skill-rules.json (gracefully degrade on failure)
         if !installed_skills.is_empty() {
-            generate_skill_rules(&config.directory, &installed_skills)?;
+            if let Err(e) = generate_skill_rules(&config.directory, &installed_skills) {
+                let warning = format!("⚠️  Failed to generate skill-rules.json: {}", e);
+                eprintln!("{}", warning);
+                report.warnings.push(warning);
+            }
 
-            // Phase 3.4: Generate .catalyst-hashes.json
-            generate_skill_hashes(&config.directory, &installed_skills)?;
+            // Phase 3.4: Generate .catalyst-hashes.json (gracefully degrade on failure)
+            if let Err(e) = generate_skill_hashes(&config.directory, &installed_skills) {
+                let warning = format!("⚠️  Failed to generate .catalyst-hashes.json: {}", e);
+                eprintln!("{}", warning);
+                report.warnings.push(warning);
+            }
         }
     }
 
@@ -1325,6 +1370,25 @@ mod tests {
         assert!(target
             .join(".claude/skills/rust-developer/SKILL.md")
             .exists());
+    }
+
+    #[test]
+    fn test_install_skill_invalid_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create .claude/skills directory
+        fs::create_dir_all(target.join(".claude/skills")).unwrap();
+
+        // Try to install invalid skill
+        let result = install_skill(target, "non-existent-skill", false);
+        assert!(result.is_err());
+
+        // Verify error message contains available skills
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid skill ID"));
+        assert!(err_msg.contains("Available skills:"));
+        assert!(err_msg.contains("skill-developer"));
     }
 
     #[test]
