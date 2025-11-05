@@ -112,7 +112,8 @@ fn validate_binary(
     };
 
     // Check if executable (Unix only)
-    let executable = if cfg!(unix) {
+    #[cfg(unix)]
+    let executable = {
         path.as_ref()
             .map(|p| {
                 fs::metadata(p)
@@ -121,9 +122,10 @@ fn validate_binary(
                     .unwrap_or(false)
             })
             .unwrap_or(false)
-    } else {
-        true // Windows executability not checked
     };
+
+    #[cfg(not(unix))]
+    let executable = true; // Windows executability not checked
 
     BinaryStatus {
         name: name.to_string(),
@@ -238,14 +240,18 @@ fn validate_hook(
     let exists = wrapper_path.exists();
 
     // Check if executable (Unix only)
-    let executable = if cfg!(unix) && exists {
+    #[cfg(unix)]
+    let executable = if exists {
         fs::metadata(&wrapper_path)
             .ok()
             .map(|m| m.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
     } else {
-        true // Windows or doesn't exist
+        false
     };
+
+    #[cfg(not(unix))]
+    let executable = true; // Windows doesn't need executable check
 
     // Check if binary is accessible
     let bin_dir = match get_binary_directory() {
