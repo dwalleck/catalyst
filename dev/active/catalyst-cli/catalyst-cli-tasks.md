@@ -360,8 +360,27 @@
 
 **Goal:** Professional, polished user experience
 
-### Task 7.1: Error Messages
+### Task 7.1: Error Messages & Validation Improvements
 - [ ] Review all `CatalystError` variants have helpful messages
+- [ ] **Clarify hook validation logic** (from PR #21 feedback, comment #1) ⚠️
+  - [ ] At status.rs:185-204 and 206-225, review break statement behavior
+  - [ ] Current: validates only first matching hook in each HookConfig
+  - [ ] Decide: Should we validate ALL hooks or just first per config?
+  - [ ] Option A: Keep current logic, improve comment clarity
+  - [ ] Option B: Remove break, validate all matching hooks (may create duplicate validations)
+  - [ ] Option C: Track validated binaries to avoid duplicates
+  - [ ] Document decision in code comments
+- [ ] **Improve skill registration validation** (from PR #21 feedback, comment #3)
+  - [ ] Parse skill-rules.json to check if skill is actually listed
+  - [ ] Set `registered: false` if skill directory exists but not in rules
+  - [ ] Add helpful error message suggesting `catalyst update` or manual edit
+  - [ ] Handle malformed JSON gracefully with clear error
+- [ ] **Report settings.json parse errors** (from PR #21 feedback, comment #2)
+  - [ ] At status.rs:172-178, capture parse error details
+  - [ ] Add issue to StatusReport when settings.json is invalid
+  - [ ] Include error message (invalid JSON, missing fields, etc.)
+  - [ ] Suggest `catalyst init --force` or manual fix
+  - [ ] Mark overall status as Error (not just silently skip hooks)
 - [ ] `BinariesNotInstalled` lists missing binaries and suggests ./install.sh
 - [ ] `SkillNotFound` lists available skills
 - [ ] Errors include context (file paths, failed commands)
