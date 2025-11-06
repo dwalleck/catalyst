@@ -575,6 +575,12 @@ pub const AVAILABLE_SKILLS_WITH_DESC: &[(&str, &str)] = &[
     ),
 ];
 
+// Compile-time assertion to ensure skill arrays stay synchronized
+const _: () = assert!(
+    AVAILABLE_SKILLS.len() == AVAILABLE_SKILLS_WITH_DESC.len(),
+    "AVAILABLE_SKILLS and AVAILABLE_SKILLS_WITH_DESC must have same length"
+);
+
 /// Default directory structure
 pub const CLAUDE_DIR: &str = ".claude";
 pub const HOOKS_DIR: &str = ".claude/hooks";

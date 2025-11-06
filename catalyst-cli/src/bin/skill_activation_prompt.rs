@@ -607,7 +607,7 @@ mod tests {
     #[test]
     fn test_error_message_rules_read_failed() {
         let path = PathBuf::from("/test/skill-rules.json");
-        let io_err = io::Error::new(io::ErrorKind::Other, "disk error");
+        let io_err = io::Error::other("disk error");
         let error = SkillActivationError::RulesReadFailed {
             path,
             source: io_err,

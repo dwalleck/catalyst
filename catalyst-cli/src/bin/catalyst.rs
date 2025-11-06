@@ -185,6 +185,7 @@ enum SettingsCommands {
 ///
 /// Returns Some(InitConfig) with user selections, or None if cancelled
 fn run_interactive_init(target_dir: &Path, force: bool) -> Result<Option<InitConfig>> {
+    // Use fixed width for consistent formatting across terminals
     const SEPARATOR_WIDTH: usize = 60;
     let theme = ColorfulTheme::default();
 

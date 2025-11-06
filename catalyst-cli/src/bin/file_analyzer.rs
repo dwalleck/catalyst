@@ -745,7 +745,7 @@ mod tests {
     #[test]
     fn test_error_message_file_read_failed() {
         let path = PathBuf::from("/test/file.ts");
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk error");
+        let io_err = std::io::Error::other("disk error");
         let error = FileAnalyzerError::FileReadFailed {
             path,
             source: io_err,
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn test_map_file_read_error_other() {
         let path = PathBuf::from("/test/path");
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk error");
+        let io_err = std::io::Error::other("disk error");
         let error = map_file_read_error(path.clone(), io_err);
 
         match error {
