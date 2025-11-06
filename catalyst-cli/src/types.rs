@@ -546,6 +546,35 @@ pub const AVAILABLE_SKILLS: &[&str] = &[
     "rust-developer",
 ];
 
+/// Skills with descriptions for interactive mode
+/// Each tuple contains (skill_id, description)
+pub const AVAILABLE_SKILLS_WITH_DESC: &[(&str, &str)] = &[
+    (
+        "skill-developer",
+        "Meta-skill for creating custom skills (framework-agnostic)",
+    ),
+    (
+        "backend-dev-guidelines",
+        "Node.js/Express/Prisma backend development patterns",
+    ),
+    (
+        "frontend-dev-guidelines",
+        "React/MUI v7/TanStack frontend development patterns",
+    ),
+    (
+        "route-tester",
+        "JWT cookie-based authentication route testing",
+    ),
+    (
+        "error-tracking",
+        "Sentry v8 error tracking and performance monitoring",
+    ),
+    (
+        "rust-developer",
+        "Rust development best practices and patterns",
+    ),
+];
+
 /// Default directory structure
 pub const CLAUDE_DIR: &str = ".claude";
 pub const HOOKS_DIR: &str = ".claude/hooks";

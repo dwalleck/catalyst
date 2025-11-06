@@ -28,9 +28,9 @@
 //! catalyst update
 //! ```
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use catalyst_cli::init;
-use catalyst_cli::types::{InitConfig, AVAILABLE_SKILLS};
+use catalyst_cli::types::{InitConfig, AVAILABLE_SKILLS, AVAILABLE_SKILLS_WITH_DESC};
 use catalyst_cli::validation::check_binaries_installed;
 use catalyst_core::settings::*;
 use clap::{Parser, Subcommand};
@@ -183,13 +183,14 @@ enum SettingsCommands {
 /// - File tracker installation
 /// - Skill selection (multi-select)
 ///
-/// Returns an InitConfig with user selections
-fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
+/// Returns Some(InitConfig) with user selections, or None if cancelled
+fn run_interactive_init(target_dir: &Path, force: bool) -> Result<Option<InitConfig>> {
+    const SEPARATOR_WIDTH: usize = 60;
     let theme = ColorfulTheme::default();
 
-    println!("{}", "━".repeat(60).bright_cyan());
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
     println!("{}", "  Interactive Catalyst Setup  ".bright_cyan().bold());
-    println!("{}", "━".repeat(60).bright_cyan());
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
     println!();
 
     // Confirm directory
@@ -200,10 +201,11 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
     let proceed = Confirm::with_theme(&theme)
         .with_prompt("Initialize Catalyst in this directory?")
         .default(true)
-        .interact()?;
+        .interact()
+        .context("Failed to get directory confirmation")?;
 
     if !proceed {
-        return Err(anyhow::anyhow!("Initialization cancelled by user"));
+        return Ok(None);
     }
 
     println!();
@@ -212,7 +214,8 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
     let install_hooks = Confirm::with_theme(&theme)
         .with_prompt("Install skill auto-activation hooks?")
         .default(true)
-        .interact()?;
+        .interact()
+        .context("Failed to get hook installation preference")?;
 
     println!();
 
@@ -220,44 +223,17 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
     let install_tracker = Confirm::with_theme(&theme)
         .with_prompt("Install file-change-tracker hook?")
         .default(true)
-        .interact()?;
+        .interact()
+        .context("Failed to get tracker installation preference")?;
 
     println!();
-
-    // Skill descriptions for display
-    let skill_descriptions = [
-        (
-            "skill-developer",
-            "Meta-skill for creating custom skills (framework-agnostic)",
-        ),
-        (
-            "backend-dev-guidelines",
-            "Node.js/Express/Prisma backend development patterns",
-        ),
-        (
-            "frontend-dev-guidelines",
-            "React/MUI v7/TanStack frontend development patterns",
-        ),
-        (
-            "route-tester",
-            "JWT cookie-based authentication route testing",
-        ),
-        (
-            "error-tracking",
-            "Sentry v8 error tracking and performance monitoring",
-        ),
-        (
-            "rust-developer",
-            "Rust development best practices and patterns",
-        ),
-    ];
 
     // Multi-select for skills
     println!("{}", "Select skills to install:".cyan().bold());
     println!("{}", "  (Use Space to select, Enter to confirm)".dimmed());
     println!();
 
-    let skill_items: Vec<String> = skill_descriptions
+    let skill_items: Vec<String> = AVAILABLE_SKILLS_WITH_DESC
         .iter()
         .map(|(name, desc)| format!("{:<30} - {}", name, desc))
         .collect();
@@ -271,7 +247,8 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
     let selected_indices = MultiSelect::with_theme(&theme)
         .items(&skill_items)
         .defaults(&default_selection)
-        .interact()?;
+        .interact()
+        .context("Failed to get skill selection")?;
 
     let selected_skills: Vec<String> = selected_indices
         .iter()
@@ -281,9 +258,9 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
     println!();
 
     // Show summary
-    println!("{}", "━".repeat(60).bright_cyan());
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
     println!("{}", "  Configuration Summary  ".bright_cyan().bold());
-    println!("{}", "━".repeat(60).bright_cyan());
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
     println!();
     println!("{}", "Directory:".cyan().bold());
     println!("  {}", target_dir.display());
@@ -309,6 +286,12 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
     println!("{}", "Skills:".cyan().bold());
     if selected_skills.is_empty() {
         println!("  {}", "None selected".yellow());
+        println!();
+        println!(
+            "{}",
+            "  ⚠️  No skills selected - you can add them later with:".yellow()
+        );
+        println!("{}", "    catalyst update".dimmed());
     } else {
         for skill in &selected_skills {
             println!("  ✓ {}", skill.green());
@@ -319,27 +302,28 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
     println!("  After initialization, customize pathPatterns in:");
     println!("    .claude/skills/skill-rules.json");
     println!();
-    println!("{}", "━".repeat(60).bright_cyan());
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
     println!();
 
     let confirm = Confirm::with_theme(&theme)
         .with_prompt("Proceed with initialization?")
         .default(true)
-        .interact()?;
+        .interact()
+        .context("Failed to get final confirmation")?;
 
     if !confirm {
-        return Err(anyhow::anyhow!("Initialization cancelled by user"));
+        return Ok(None);
     }
 
     println!();
 
-    Ok(InitConfig {
+    Ok(Some(InitConfig {
         directory: target_dir.to_path_buf(),
         install_hooks,
         install_tracker,
         skills: selected_skills,
         force,
-    })
+    }))
 }
 
 fn main() -> Result<()> {
@@ -372,7 +356,18 @@ fn main() -> Result<()> {
             // Build config based on mode
             let config = if interactive {
                 // Interactive mode - guide user through setup
-                run_interactive_init(&target_dir, force)?
+                match run_interactive_init(&target_dir, force)? {
+                    Some(cfg) => cfg,
+                    None => {
+                        // User cancelled
+                        if use_color {
+                            println!("{}", "❌ Initialization cancelled".yellow());
+                        } else {
+                            println!("❌ Initialization cancelled");
+                        }
+                        return Ok(());
+                    }
+                }
             } else {
                 // Non-interactive mode - use defaults and flags
                 let mut skills = Vec::new();
