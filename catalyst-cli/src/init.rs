@@ -1600,6 +1600,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // Only run on Unix systems that support file permissions
     fn test_read_version_file_with_error_context() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1610,25 +1611,22 @@ mod tests {
         let version_path = target.join(VERSION_FILE);
         fs::write(&version_path, "0.1.0\n").unwrap();
 
-        // Make it unreadable (Unix only)
-        #[cfg(unix)]
-        {
-            fs::set_permissions(&version_path, fs::Permissions::from_mode(0o000)).unwrap();
+        // Make it unreadable
+        fs::set_permissions(&version_path, fs::Permissions::from_mode(0o000)).unwrap();
 
-            // Try to read it - should fail with proper error context
-            let result = read_version_file(target);
-            assert!(result.is_err());
-            match result {
-                Err(CatalystError::FileReadFailed { path, source }) => {
-                    assert_eq!(path, version_path);
-                    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
-                }
-                _ => panic!("Expected FileReadFailed with context"),
+        // Try to read it - should fail with proper error context
+        let result = read_version_file(target);
+        assert!(result.is_err());
+        match result {
+            Err(CatalystError::FileReadFailed { path, source }) => {
+                assert_eq!(path, version_path);
+                assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
             }
-
-            // Clean up - restore permissions so tempdir can be deleted
-            fs::set_permissions(&version_path, fs::Permissions::from_mode(0o644)).unwrap();
+            _ => panic!("Expected FileReadFailed with context"),
         }
+
+        // Clean up - restore permissions so tempdir can be deleted
+        fs::set_permissions(&version_path, fs::Permissions::from_mode(0o644)).unwrap();
     }
 
     #[test]
@@ -1647,29 +1645,28 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // Only run on Unix systems that support file permissions
     fn test_write_version_file_with_error_context() {
+        use std::os::unix::fs::PermissionsExt;
+
         let temp_dir = TempDir::new().unwrap();
         let target = temp_dir.path();
 
-        // Create a read-only directory (Unix only)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(target, fs::Permissions::from_mode(0o555)).unwrap();
+        // Create a read-only directory
+        fs::set_permissions(target, fs::Permissions::from_mode(0o555)).unwrap();
 
-            // Try to write version file - should fail with proper error context
-            let result = write_version_file(target);
-            assert!(result.is_err());
-            match result {
-                Err(CatalystError::FileWriteFailed { path, source }) => {
-                    assert_eq!(path, target.join(VERSION_FILE));
-                    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
-                }
-                _ => panic!("Expected FileWriteFailed with context"),
+        // Try to write version file - should fail with proper error context
+        let result = write_version_file(target);
+        assert!(result.is_err());
+        match result {
+            Err(CatalystError::FileWriteFailed { path, source }) => {
+                assert_eq!(path, target.join(VERSION_FILE));
+                assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
             }
-
-            // Clean up - restore permissions so tempdir can be deleted
-            fs::set_permissions(target, fs::Permissions::from_mode(0o755)).unwrap();
+            _ => panic!("Expected FileWriteFailed with context"),
         }
+
+        // Clean up - restore permissions so tempdir can be deleted
+        fs::set_permissions(target, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }

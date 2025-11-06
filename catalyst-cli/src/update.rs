@@ -340,31 +340,29 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_compute_file_hash_permission_denied() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::PermissionsExt;
 
-            let temp_dir = TempDir::new().unwrap();
-            let test_file = temp_dir.path().join("test.txt");
-            fs::write(&test_file, b"test content").unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, b"test content").unwrap();
 
-            // Make file unreadable
-            fs::set_permissions(&test_file, fs::Permissions::from_mode(0o000)).unwrap();
+        // Make file unreadable
+        fs::set_permissions(&test_file, fs::Permissions::from_mode(0o000)).unwrap();
 
-            let result = compute_file_hash(&test_file);
-            assert!(result.is_err());
-            match result {
-                Err(CatalystError::FileReadFailed { path, source }) => {
-                    assert_eq!(path, test_file);
-                    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
-                }
-                _ => panic!("Expected FileReadFailed with PermissionDenied error"),
+        let result = compute_file_hash(&test_file);
+        assert!(result.is_err());
+        match result {
+            Err(CatalystError::FileReadFailed { path, source }) => {
+                assert_eq!(path, test_file);
+                assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
             }
-
-            // Clean up
-            fs::set_permissions(&test_file, fs::Permissions::from_mode(0o644)).unwrap();
+            _ => panic!("Expected FileReadFailed with PermissionDenied error"),
         }
+
+        // Clean up
+        fs::set_permissions(&test_file, fs::Permissions::from_mode(0o644)).unwrap();
     }
 
     #[test]
@@ -406,33 +404,31 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_copy_skill_files_with_error_context() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::PermissionsExt;
 
-            let temp_dir = TempDir::new().unwrap();
-            let target = temp_dir.path();
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
 
-            // Make directory read-only
-            fs::set_permissions(target, fs::Permissions::from_mode(0o555)).unwrap();
+        // Make directory read-only
+        fs::set_permissions(target, fs::Permissions::from_mode(0o555)).unwrap();
 
-            // Use empty embedded dir for test
-            static EMPTY_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/../.claude/skills");
-            if let Some(skill_dir) = EMPTY_DIR.get_dir("skill-developer") {
-                let result = copy_skill_files(skill_dir, &target.join("test-skill"));
-                assert!(result.is_err());
-                match result {
-                    Err(CatalystError::DirectoryCreationFailed { path, source }) => {
-                        assert!(path.ends_with("test-skill"));
-                        assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
-                    }
-                    _ => panic!("Expected DirectoryCreationFailed with context"),
+        // Use empty embedded dir for test
+        static EMPTY_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/../.claude/skills");
+        if let Some(skill_dir) = EMPTY_DIR.get_dir("skill-developer") {
+            let result = copy_skill_files(skill_dir, &target.join("test-skill"));
+            assert!(result.is_err());
+            match result {
+                Err(CatalystError::DirectoryCreationFailed { path, source }) => {
+                    assert!(path.ends_with("test-skill"));
+                    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
                 }
+                _ => panic!("Expected DirectoryCreationFailed with context"),
             }
-
-            // Clean up
-            fs::set_permissions(target, fs::Permissions::from_mode(0o755)).unwrap();
         }
+
+        // Clean up
+        fs::set_permissions(target, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
