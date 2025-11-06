@@ -17,6 +17,27 @@ pub enum CatalystError {
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("Failed to read file {path}: {source}")]
+    FileReadFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to write file {path}: {source}")]
+    FileWriteFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to create directory {path}: {source}")]
+    DirectoryCreationFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("Path not found: {0}")]
     PathNotFound(PathBuf),
 
