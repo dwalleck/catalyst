@@ -28,16 +28,17 @@
 //! catalyst update
 //! ```
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use catalyst_cli::init;
-use catalyst_cli::types::InitConfig;
+use catalyst_cli::types::{InitConfig, AVAILABLE_SKILLS, AVAILABLE_SKILLS_WITH_DESC};
 use catalyst_cli::validation::check_binaries_installed;
 use catalyst_core::settings::*;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
 use std::env;
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 #[derive(Parser)]
@@ -174,6 +175,158 @@ enum SettingsCommands {
     },
 }
 
+/// Run interactive initialization prompts
+///
+/// Guides the user through setup with prompts for:
+/// - Directory confirmation
+/// - Hook installation
+/// - File tracker installation
+/// - Skill selection (multi-select)
+///
+/// Returns Some(InitConfig) with user selections, or None if cancelled
+fn run_interactive_init(target_dir: &Path, force: bool) -> Result<Option<InitConfig>> {
+    // Use fixed width for consistent formatting across terminals
+    const SEPARATOR_WIDTH: usize = 60;
+    let theme = ColorfulTheme::default();
+
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
+    println!("{}", "  Interactive Catalyst Setup  ".bright_cyan().bold());
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
+    println!();
+
+    // Confirm directory
+    println!("{}", "Target directory:".cyan().bold());
+    println!("  {}", target_dir.display());
+    println!();
+
+    let proceed = Confirm::with_theme(&theme)
+        .with_prompt("Initialize Catalyst in this directory?")
+        .default(true)
+        .interact()
+        .context("Failed to get directory confirmation")?;
+
+    if !proceed {
+        return Ok(None);
+    }
+
+    println!();
+
+    // Ask about hooks
+    let install_hooks = Confirm::with_theme(&theme)
+        .with_prompt("Install skill auto-activation hooks?")
+        .default(true)
+        .interact()
+        .context("Failed to get hook installation preference")?;
+
+    println!();
+
+    // Ask about tracker
+    let install_tracker = Confirm::with_theme(&theme)
+        .with_prompt("Install file-change-tracker hook?")
+        .default(true)
+        .interact()
+        .context("Failed to get tracker installation preference")?;
+
+    println!();
+
+    // Multi-select for skills
+    println!("{}", "Select skills to install:".cyan().bold());
+    println!("{}", "  (Use Space to select, Enter to confirm)".dimmed());
+    println!();
+
+    let skill_items: Vec<String> = AVAILABLE_SKILLS_WITH_DESC
+        .iter()
+        .map(|(name, desc)| format!("{:<30} - {}", name, desc))
+        .collect();
+
+    // Create default selection (skill-developer pre-selected)
+    let default_selection: Vec<bool> = AVAILABLE_SKILLS
+        .iter()
+        .map(|&skill| skill == "skill-developer")
+        .collect();
+
+    let selected_indices = MultiSelect::with_theme(&theme)
+        .items(&skill_items)
+        .defaults(&default_selection)
+        .interact()
+        .context("Failed to get skill selection")?;
+
+    let selected_skills: Vec<String> = selected_indices
+        .iter()
+        .filter_map(|&i| AVAILABLE_SKILLS.get(i).map(|s| s.to_string()))
+        .collect();
+
+    println!();
+
+    // Show summary
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
+    println!("{}", "  Configuration Summary  ".bright_cyan().bold());
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
+    println!();
+    println!("{}", "Directory:".cyan().bold());
+    println!("  {}", target_dir.display());
+    println!();
+    println!("{}", "Hooks:".cyan().bold());
+    println!(
+        "  Auto-activation hooks: {}",
+        if install_hooks {
+            "✓ Yes".green()
+        } else {
+            "✗ No".red()
+        }
+    );
+    println!(
+        "  File-change tracker:   {}",
+        if install_tracker {
+            "✓ Yes".green()
+        } else {
+            "✗ No".red()
+        }
+    );
+    println!();
+    println!("{}", "Skills:".cyan().bold());
+    if selected_skills.is_empty() {
+        println!("  {}", "None selected".yellow());
+        println!();
+        println!(
+            "{}",
+            "  ⚠️  No skills selected - you can add them later with:".yellow()
+        );
+        println!("{}", "    catalyst update".dimmed());
+    } else {
+        for skill in &selected_skills {
+            println!("  ✓ {}", skill.green());
+        }
+    }
+    println!();
+    println!("{}", "💡 Note:".yellow().bold());
+    println!("  After initialization, customize pathPatterns in:");
+    println!("    .claude/skills/skill-rules.json");
+    println!();
+    println!("{}", "━".repeat(SEPARATOR_WIDTH).bright_cyan());
+    println!();
+
+    let confirm = Confirm::with_theme(&theme)
+        .with_prompt("Proceed with initialization?")
+        .default(true)
+        .interact()
+        .context("Failed to get final confirmation")?;
+
+    if !confirm {
+        return Ok(None);
+    }
+
+    println!();
+
+    Ok(Some(InitConfig {
+        directory: target_dir.to_path_buf(),
+        install_hooks,
+        install_tracker,
+        skills: selected_skills,
+        force,
+    }))
+}
+
 fn main() -> Result<()> {
     // Check for NO_COLOR environment variable and TTY
     let use_color = env::var("NO_COLOR").is_err() && io::stdout().is_terminal();
@@ -201,34 +354,39 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
 
-            // Build skill list based on flags
-            let mut skills = Vec::new();
-            if all {
-                skills.extend_from_slice(catalyst_cli::types::AVAILABLE_SKILLS);
-            } else {
-                // Default: install skill-developer
-                // TODO Phase 3: Implement skill selection logic
-                skills.push("skill-developer");
-            }
-
-            // Build config
-            let config = InitConfig {
-                directory: target_dir.clone(),
-                install_hooks: true,   // Always install hooks
-                install_tracker: true, // Always install tracker
-                skills: skills.iter().map(|s| s.to_string()).collect(),
-                force,
-            };
-
-            // Handle interactive mode
-            if interactive {
-                if use_color {
-                    println!("{}", "🔧 Interactive mode not yet implemented".yellow());
-                } else {
-                    println!("🔧 Interactive mode not yet implemented");
+            // Build config based on mode
+            let config = if interactive {
+                // Interactive mode - guide user through setup
+                match run_interactive_init(&target_dir, force)? {
+                    Some(cfg) => cfg,
+                    None => {
+                        // User cancelled
+                        if use_color {
+                            println!("{}", "❌ Initialization cancelled".yellow());
+                        } else {
+                            println!("❌ Initialization cancelled");
+                        }
+                        return Ok(());
+                    }
                 }
-                println!("Proceeding with default configuration...\n");
-            }
+            } else {
+                // Non-interactive mode - use defaults and flags
+                let mut skills = Vec::new();
+                if all {
+                    skills.extend_from_slice(catalyst_cli::types::AVAILABLE_SKILLS);
+                } else {
+                    // Default: install skill-developer
+                    skills.push("skill-developer");
+                }
+
+                InitConfig {
+                    directory: target_dir.clone(),
+                    install_hooks: true,   // Always install hooks
+                    install_tracker: true, // Always install tracker
+                    skills: skills.iter().map(|s| s.to_string()).collect(),
+                    force,
+                }
+            };
 
             // Run initialization
             if use_color {

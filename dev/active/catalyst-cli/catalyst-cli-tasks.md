@@ -1,7 +1,7 @@
 # Catalyst CLI - Task Checklist
 
-**Last Updated:** 2025-01-04 (Phase 4 completed)
-**Status:** Phase 4 Complete - Phase 5 Ready
+**Last Updated:** 2025-01-05 (Phase 5 completed)
+**Status:** Phase 5 Complete - Phase 6 Ready
 **Related Plan:** catalyst-cli-plan.md
 **Related Context:** catalyst-cli-context.md
 
@@ -293,30 +293,30 @@
 
 ---
 
-## Phase 5: Interactive Mode (1 day)
+## Phase 5: Interactive Mode (1 day) ✅ **COMPLETED**
 
 **Goal:** Guided setup with user prompts
 
-### Task 5.1: Interactive Init Flow
-- [ ] Add `dialoguer` dependency
-- [ ] Implement `run_interactive_init()` function
-- [ ] Prompt to confirm directory
-- [ ] Ask: "Install skill auto-activation hooks?"
-- [ ] Ask: "Install file-change-tracker?"
-- [ ] Multi-select: "Which skills to install?" (Space to select, Enter to confirm)
-- [ ] List all 5 skills with descriptions
-- [ ] Default: skill-developer selected
-- [ ] Show summary before proceeding
-- [ ] Allow user to cancel at any step (Ctrl+C)
-- [ ] Return `InitConfig` with user selections
-- [ ] Add note about customizing pathPatterns in summary
+### Task 5.1: Interactive Init Flow ✅
+- [x] Add `dialoguer` dependency (already present in Cargo.toml)
+- [x] Implement `run_interactive_init()` function
+- [x] Prompt to confirm directory
+- [x] Ask: "Install skill auto-activation hooks?"
+- [x] Ask: "Install file-change-tracker?"
+- [x] Multi-select: "Which skills to install?" (Space to select, Enter to confirm)
+- [x] List all 6 skills with descriptions (updated count)
+- [x] Default: skill-developer selected
+- [x] Show summary before proceeding
+- [x] Allow user to cancel at any step (Ctrl+C)
+- [x] Return `InitConfig` with user selections
+- [x] Add note about customizing pathPatterns in summary
 
-### Task 5.2: Progress Indicators
-- [ ] Add `indicatif` dependency
-- [ ] Implement progress bar during skill installation
-- [ ] Update message for each skill: "Installing skill-developer..."
-- [ ] Show completion message: "✅ Installed X skills"
-- [ ] Test output looks professional and polished
+### Task 5.2: Progress Indicators ✅
+- [x] Add `indicatif` dependency (already present in Cargo.toml)
+- [x] Implement progress bar during skill installation
+- [x] Update message for each skill: "Installing skill-developer..."
+- [x] Show completion message: "✅ Installed X skills"
+- [x] Test output looks professional and polished
 
 ---
 
