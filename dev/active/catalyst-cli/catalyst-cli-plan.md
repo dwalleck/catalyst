@@ -450,13 +450,38 @@ Never assume platform:
 - `catalyst add-skill <skill-id>` - Add skills after init
 - `catalyst remove-skill <skill-id>` - Remove unwanted skills
 - `catalyst doctor` - Deep diagnostics with repair suggestions
+- **Unit tests for interactive mode** - Test `run_interactive_init()` with mocked inputs
+  ```rust
+  #[test]
+  fn test_user_cancels_at_directory_prompt() {
+      // Mock dialoguer to return false
+      // Assert Ok(None) returned
+  }
+  ```
 
 ### Medium Priority
 
 - Smart project structure detection (monorepo vs single-app)
 - Language-specific pathPattern presets
 - `catalyst upgrade` - In-place binary upgrades from GitHub releases
-- Configuration profiles (save and reuse init configs)
+- **Configuration profiles** - Save and reuse init configs with presets
+  ```bash
+  catalyst init --interactive --save-as my-preset
+  catalyst init --preset my-preset
+  ```
+- **Dynamic separator width** - Make terminal UI responsive to terminal width
+  ```rust
+  // Instead of const SEPARATOR_WIDTH: usize = 60;
+  let separator_width = terminal_size().map(|(w, _)| w).unwrap_or(60);
+  ```
+- **Skill preview in interactive mode** - Show detailed info on request
+  ```
+  Press 'i' for more info on highlighted skill
+  ```
+- **Custom progress bar themes** - Allow styling via environment variable
+  ```bash
+  CATALYST_THEME=minimal catalyst init --interactive
+  ```
 
 ### Low Priority
 
