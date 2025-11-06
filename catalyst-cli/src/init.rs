@@ -593,7 +593,7 @@ pub fn install_skills(target_dir: &Path, skill_ids: &[String], force: bool) -> R
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-                .unwrap()
+                .expect("Invalid progress bar template")
                 .progress_chars("━━╸"),
         );
         Some(pb)

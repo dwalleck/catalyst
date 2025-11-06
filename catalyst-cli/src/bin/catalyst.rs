@@ -203,8 +203,7 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
         .interact()?;
 
     if !proceed {
-        println!("\n{}", "❌ Initialization cancelled".yellow());
-        std::process::exit(0);
+        return Err(anyhow::anyhow!("Initialization cancelled by user"));
     }
 
     println!();
@@ -263,22 +262,20 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
         .map(|(name, desc)| format!("{:<30} - {}", name, desc))
         .collect();
 
-    // Find index of skill-developer (default selection)
-    let default_selection: Vec<usize> = AVAILABLE_SKILLS
+    // Create default selection (skill-developer pre-selected)
+    let default_selection: Vec<bool> = AVAILABLE_SKILLS
         .iter()
-        .enumerate()
-        .filter(|(_, &skill)| skill == "skill-developer")
-        .map(|(i, _)| i)
+        .map(|&skill| skill == "skill-developer")
         .collect();
 
     let selected_indices = MultiSelect::with_theme(&theme)
         .items(&skill_items)
-        .defaults(&default_selection.iter().map(|&_i| true).collect::<Vec<_>>())
+        .defaults(&default_selection)
         .interact()?;
 
     let selected_skills: Vec<String> = selected_indices
         .iter()
-        .map(|&i| AVAILABLE_SKILLS[i].to_string())
+        .filter_map(|&i| AVAILABLE_SKILLS.get(i).map(|s| s.to_string()))
         .collect();
 
     println!();
@@ -331,8 +328,7 @@ fn run_interactive_init(target_dir: &Path, force: bool) -> Result<InitConfig> {
         .interact()?;
 
     if !confirm {
-        println!("\n{}", "❌ Initialization cancelled".yellow());
-        std::process::exit(0);
+        return Err(anyhow::anyhow!("Initialization cancelled by user"));
     }
 
     println!();
