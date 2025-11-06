@@ -5,7 +5,7 @@
 
 use crate::types::{
     CatalystError, InitConfig, InitReport, Platform, Result, AGENTS_DIR, AVAILABLE_SKILLS,
-    CLAUDE_DIR, COMMANDS_DIR, HOOKS_DIR, SKILLS_DIR,
+    CATALYST_VERSION, CLAUDE_DIR, COMMANDS_DIR, HOOKS_DIR, SKILLS_DIR, VERSION_FILE,
 };
 use include_dir::{include_dir, Dir};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -899,6 +899,43 @@ fn collect_file_hashes(
 /// # Returns
 ///
 /// Returns an `InitReport` with details of what was created
+///
+/// Write .catalyst-version file to track installation version
+///
+/// # Arguments
+///
+/// * `target_dir` - Directory where .catalyst-version should be created
+///
+/// # Returns
+///
+/// Returns Ok(()) on success
+pub fn write_version_file(target_dir: &Path) -> Result<()> {
+    let version_path = target_dir.join(VERSION_FILE);
+    fs::write(&version_path, format!("{}\n", CATALYST_VERSION)).map_err(CatalystError::Io)?;
+    Ok(())
+}
+
+/// Read .catalyst-version file
+///
+/// # Arguments
+///
+/// * `target_dir` - Directory where .catalyst-version exists
+///
+/// # Returns
+///
+/// Returns the version string on success, None if file doesn't exist
+pub fn read_version_file(target_dir: &Path) -> Result<Option<String>> {
+    let version_path = target_dir.join(VERSION_FILE);
+
+    if !version_path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&version_path).map_err(CatalystError::Io)?;
+
+    Ok(Some(content.trim().to_string()))
+}
+
 pub fn initialize(config: &InitConfig) -> Result<InitReport> {
     // Acquire lock to prevent concurrent init
     let _lock = acquire_init_lock(&config.directory)?;
@@ -948,6 +985,15 @@ pub fn initialize(config: &InitConfig) -> Result<InitReport> {
                 report.warnings.push(warning);
             }
         }
+    }
+
+    // Phase 6.1: Write .catalyst-version file to track installation
+    if let Err(e) = write_version_file(&config.directory) {
+        let warning = format!("⚠️  Failed to write .catalyst-version: {}", e);
+        eprintln!("{}", warning);
+        report.warnings.push(warning);
+    } else {
+        report.version_file_created = true;
     }
 
     Ok(report)

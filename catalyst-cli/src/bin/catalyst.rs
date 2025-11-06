@@ -31,6 +31,7 @@
 use anyhow::{Context, Result};
 use catalyst_cli::init;
 use catalyst_cli::types::{InitConfig, AVAILABLE_SKILLS, AVAILABLE_SKILLS_WITH_DESC};
+use catalyst_cli::update;
 use catalyst_cli::validation::check_binaries_installed;
 use catalyst_core::settings::*;
 use clap::{Parser, Subcommand};
@@ -548,12 +549,97 @@ fn main() -> Result<()> {
                 path.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
             if use_color {
-                println!("{}", "⚠️  Not implemented yet".yellow().bold());
+                println!("{}", "🔄 Updating Catalyst...".cyan().bold());
             } else {
-                println!("⚠️  Not implemented yet");
+                println!("🔄 Updating Catalyst...");
             }
-            println!("Would update: {:?}", target_dir);
-            println!("  Force: {}", force);
+            println!();
+
+            // Run update
+            let report = update::update(&target_dir, force)?;
+
+            // Display results
+            if report.updated_skills.is_empty()
+                && report.updated_hooks.is_empty()
+                && report.skipped_skills.is_empty()
+            {
+                if use_color {
+                    println!("{}", "✅ Already up to date!".green().bold());
+                } else {
+                    println!("✅ Already up to date!");
+                }
+            } else {
+                // Show updated hooks
+                if !report.updated_hooks.is_empty() {
+                    if use_color {
+                        println!("{}", "Updated hooks:".green().bold());
+                    } else {
+                        println!("Updated hooks:");
+                    }
+                    for hook in &report.updated_hooks {
+                        println!("  ✓ {}", hook);
+                    }
+                    println!();
+                }
+
+                // Show updated skills
+                if !report.updated_skills.is_empty() {
+                    if use_color {
+                        println!("{}", "Updated skills:".green().bold());
+                    } else {
+                        println!("Updated skills:");
+                    }
+                    for skill in &report.updated_skills {
+                        println!("  ✓ {}", skill);
+                    }
+                    println!();
+                }
+
+                // Show skipped skills
+                if !report.skipped_skills.is_empty() {
+                    if use_color {
+                        println!("{}", "Skipped skills (modified locally):".yellow().bold());
+                    } else {
+                        println!("Skipped skills (modified locally):");
+                    }
+                    for skipped in &report.skipped_skills {
+                        println!("  ⚠️  {} - {}", skipped.name, skipped.reason);
+                    }
+                    println!();
+                    if use_color {
+                        println!("{}", "  Use --force to overwrite modified skills".yellow());
+                    } else {
+                        println!("  Use --force to overwrite modified skills");
+                    }
+                    println!();
+                }
+
+                // Show errors
+                if !report.errors.is_empty() {
+                    if use_color {
+                        println!("{}", "Errors:".red().bold());
+                    } else {
+                        println!("Errors:");
+                    }
+                    for error in &report.errors {
+                        println!("  ❌ {}", error);
+                    }
+                    println!();
+                }
+
+                // Final status
+                if report.success {
+                    if use_color {
+                        println!("{}", "✅ Update completed successfully!".green().bold());
+                    } else {
+                        println!("✅ Update completed successfully!");
+                    }
+                } else if use_color {
+                    println!("{}", "⚠️  Update completed with errors".yellow().bold());
+                } else {
+                    println!("⚠️  Update completed with errors");
+                }
+            }
         }
 
         Commands::Settings { command } => {
