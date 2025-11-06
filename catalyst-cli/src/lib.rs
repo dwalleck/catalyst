@@ -6,6 +6,7 @@
 pub mod init;
 pub mod status;
 pub mod types;
+pub mod update;
 pub mod validation;
 
 // Re-export commonly used types

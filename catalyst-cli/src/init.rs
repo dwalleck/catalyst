@@ -5,7 +5,7 @@
 
 use crate::types::{
     CatalystError, InitConfig, InitReport, Platform, Result, AGENTS_DIR, AVAILABLE_SKILLS,
-    CLAUDE_DIR, COMMANDS_DIR, HOOKS_DIR, SKILLS_DIR,
+    CATALYST_VERSION, CLAUDE_DIR, COMMANDS_DIR, HOOKS_DIR, SKILLS_DIR, VERSION_FILE,
 };
 use include_dir::{include_dir, Dir};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -899,6 +899,54 @@ fn collect_file_hashes(
 /// # Returns
 ///
 /// Returns an `InitReport` with details of what was created
+///
+/// Write .catalyst-version file to track installation version
+///
+/// # Arguments
+///
+/// * `target_dir` - Directory where .catalyst-version should be created
+///
+/// # Returns
+///
+/// Returns Ok(()) on success
+pub fn write_version_file(target_dir: &Path) -> Result<()> {
+    let version_path = target_dir.join(VERSION_FILE);
+    fs::write(&version_path, format!("{}\n", CATALYST_VERSION)).map_err(|e| {
+        CatalystError::FileWriteFailed {
+            path: version_path.clone(),
+            source: e,
+        }
+    })?;
+    Ok(())
+}
+
+/// Read .catalyst-version file
+///
+/// # Arguments
+///
+/// * `target_dir` - Directory where .catalyst-version exists
+///
+/// # Returns
+///
+/// Returns the version string on success, None if file doesn't exist
+///
+/// # Implementation Note
+///
+/// Avoids TOCTOU (Time-of-Check-Time-of-Use) race by directly attempting
+/// to read the file instead of checking existence first.
+pub fn read_version_file(target_dir: &Path) -> Result<Option<String>> {
+    let version_path = target_dir.join(VERSION_FILE);
+
+    match fs::read_to_string(&version_path) {
+        Ok(content) => Ok(Some(content.trim().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(CatalystError::FileReadFailed {
+            path: version_path,
+            source: e,
+        }),
+    }
+}
+
 pub fn initialize(config: &InitConfig) -> Result<InitReport> {
     // Acquire lock to prevent concurrent init
     let _lock = acquire_init_lock(&config.directory)?;
@@ -948,6 +996,15 @@ pub fn initialize(config: &InitConfig) -> Result<InitReport> {
                 report.warnings.push(warning);
             }
         }
+    }
+
+    // Phase 6.1: Write .catalyst-version file to track installation
+    if let Err(e) = write_version_file(&config.directory) {
+        let warning = format!("⚠️  Failed to write .catalyst-version: {}", e);
+        eprintln!("{}", warning);
+        report.warnings.push(warning);
+    } else {
+        report.version_file_created = true;
     }
 
     Ok(report)
@@ -1516,5 +1573,100 @@ mod tests {
         let hashes: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert!(hashes.is_object());
         assert!(!hashes.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_read_version_file_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Write a version file
+        let version_path = target.join(VERSION_FILE);
+        fs::write(&version_path, "0.1.0\n").unwrap();
+
+        // Read it back
+        let result = read_version_file(target).unwrap();
+        assert_eq!(result, Some("0.1.0".to_string()));
+    }
+
+    #[test]
+    fn test_read_version_file_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // No version file exists
+        let result = read_version_file(target).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    #[cfg(unix)] // Only run on Unix systems that support file permissions
+    fn test_read_version_file_with_error_context() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create a version file
+        let version_path = target.join(VERSION_FILE);
+        fs::write(&version_path, "0.1.0\n").unwrap();
+
+        // Make it unreadable
+        fs::set_permissions(&version_path, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Try to read it - should fail with proper error context
+        let result = read_version_file(target);
+        assert!(result.is_err());
+        match result {
+            Err(CatalystError::FileReadFailed { path, source }) => {
+                assert_eq!(path, version_path);
+                assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+            }
+            _ => panic!("Expected FileReadFailed with context"),
+        }
+
+        // Clean up - restore permissions so tempdir can be deleted
+        fs::set_permissions(&version_path, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    #[test]
+    fn test_write_version_file_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Write version file
+        write_version_file(target).unwrap();
+
+        // Verify it was written correctly
+        let version_path = target.join(VERSION_FILE);
+        assert!(version_path.exists());
+        let content = fs::read_to_string(&version_path).unwrap();
+        assert_eq!(content, format!("{}\n", CATALYST_VERSION));
+    }
+
+    #[test]
+    #[cfg(unix)] // Only run on Unix systems that support file permissions
+    fn test_write_version_file_with_error_context() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create a read-only directory
+        fs::set_permissions(target, fs::Permissions::from_mode(0o555)).unwrap();
+
+        // Try to write version file - should fail with proper error context
+        let result = write_version_file(target);
+        assert!(result.is_err());
+        match result {
+            Err(CatalystError::FileWriteFailed { path, source }) => {
+                assert_eq!(path, target.join(VERSION_FILE));
+                assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+            }
+            _ => panic!("Expected FileWriteFailed with context"),
+        }
+
+        // Clean up - restore permissions so tempdir can be deleted
+        fs::set_permissions(target, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
