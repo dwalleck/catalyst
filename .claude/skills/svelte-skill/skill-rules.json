@@ -1,0 +1,48 @@
+{
+  "triggers": [
+    {
+      "type": "keyword",
+      "patterns": ["svelte", "sveltekit", ".svelte", "runes", "$state", "$derived", "$effect", "$props"],
+      "description": "Activate when user mentions Svelte framework or Svelte-specific concepts"
+    },
+    {
+      "type": "fileContent",
+      "patterns": [
+        "<script>\\s*\\$state",
+        "<script>\\s*\\$derived",
+        "<script>\\s*\\$effect",
+        "<script>\\s*let\\s+{.*}\\s*=\\s*\\$props",
+        "\\.svelte$"
+      ],
+      "description": "Activate when editing Svelte component files with runes"
+    },
+    {
+      "type": "pathPattern",
+      "patterns": [
+        "**/*.svelte",
+        "**/*.svelte.js",
+        "**/*.svelte.ts",
+        "**/svelte.config.js",
+        "**/svelte.config.ts"
+      ],
+      "description": "Activate when working with Svelte files"
+    },
+    {
+      "type": "intent",
+      "patterns": [
+        "create.*svelte component",
+        "build.*svelte.*app",
+        "reactive state",
+        "component prop",
+        "two-way binding",
+        "svelte animation",
+        "svelte transition",
+        "scoped styles",
+        "svelte store"
+      ],
+      "description": "Activate when user intent indicates Svelte development work"
+    }
+  ],
+  "enforcement": "suggest",
+  "priority": "high"
+}
