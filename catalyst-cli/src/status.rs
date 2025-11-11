@@ -430,7 +430,9 @@ fn collect_issues(report: &mut StatusReport, settings_parse_error: Option<String
             component: "settings.json".to_string(),
             description: error_msg,
             auto_fixable: false,
-            suggested_fix: Some("Fix settings.json manually or run: catalyst init --force".to_string()),
+            suggested_fix: Some(
+                "Fix settings.json manually or run: catalyst init --force".to_string(),
+            ),
         });
     }
 
@@ -507,7 +509,7 @@ fn collect_issues(report: &mut StatusReport, settings_parse_error: Option<String
                 ),
                 auto_fixable: false,
                 suggested_fix: Some(
-                    "Add skill to skill-rules.json manually or run: catalyst update".to_string()
+                    "Add skill to skill-rules.json manually or run: catalyst update".to_string(),
                 ),
             });
         }

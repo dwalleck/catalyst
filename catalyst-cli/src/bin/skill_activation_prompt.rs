@@ -224,7 +224,10 @@ fn run() -> Result<(), SkillActivationError> {
                 .join("skills")
                 .join("skill-rules.json");
 
-            debug!("Using skill-rules.json from project dir: {}", fallback_path.display());
+            debug!(
+                "Using skill-rules.json from project dir: {}",
+                fallback_path.display()
+            );
             fallback_path
         }
     };
