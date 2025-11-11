@@ -42,7 +42,7 @@ struct HookInput {
     #[serde(rename = "transcript_path")]
     _transcript_path: String,
     #[serde(rename = "cwd")]
-    _cwd: String,
+    cwd: String,
     #[serde(rename = "permission_mode")]
     _permission_mode: String,
     prompt: String,
@@ -202,15 +202,32 @@ fn run() -> Result<(), SkillActivationError> {
     let prompt = &data.prompt;
     let prompt_lower = prompt.to_lowercase();
 
-    // Load skill rules (cross-platform path handling)
-    let project_dir = env::var("CLAUDE_PROJECT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+    // Load skill rules with multi-directory support
+    // Priority: cwd (for /add-dir support) > CLAUDE_PROJECT_DIR > current directory
+    // This enables each directory to have its own skill-rules.json
+    let rules_path = {
+        let cwd_path = PathBuf::from(&data.cwd)
+            .join(".claude")
+            .join("skills")
+            .join("skill-rules.json");
 
-    let rules_path = project_dir
-        .join(".claude")
-        .join("skills")
-        .join("skill-rules.json");
+        if cwd_path.exists() {
+            debug!("Using skill-rules.json from cwd: {}", cwd_path.display());
+            cwd_path
+        } else {
+            let project_dir = env::var("CLAUDE_PROJECT_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from(&data.cwd));
+
+            let fallback_path = project_dir
+                .join(".claude")
+                .join("skills")
+                .join("skill-rules.json");
+
+            debug!("Using skill-rules.json from project dir: {}", fallback_path.display());
+            fallback_path
+        }
+    };
 
     let rules_content =
         fs::read_to_string(&rules_path).map_err(|e| map_file_read_error(rules_path.clone(), e))?;
