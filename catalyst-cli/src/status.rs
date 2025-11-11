@@ -227,9 +227,9 @@ fn validate_hooks(
 /// This function encapsulates the common pattern of:
 /// 1. Checking if hooks are configured for a specific event
 /// 2. Searching for hooks that reference a specific binary
-/// 3. Validating the wrapper script once per config
+/// 3. Validating each unique wrapper script exactly once
 ///
-/// # Why we validate only once per config
+/// # Deduplication Strategy (PR feedback - validate all hooks, deduplicate wrappers)
 ///
 /// Settings.json can have multiple hook commands in a single HookConfig:
 /// ```json
@@ -241,8 +241,11 @@ fn validate_hooks(
 /// }]
 /// ```
 ///
-/// Multiple hooks might reference the same wrapper script. We only need to validate
-/// the wrapper exists once, not for each reference. The `break` statement ensures this.
+/// Multiple hooks might reference the same wrapper script. We validate all matching hooks
+/// but track which unique wrappers we've already validated using a HashSet. This ensures:
+/// - All hooks are checked (no early break)
+/// - Each unique wrapper is validated only once (deduplication)
+/// - No duplicate entries in the status report
 #[allow(clippy::too_many_arguments)]
 fn validate_hook_for_event(
     settings: &catalyst_core::settings::ClaudeSettings,
@@ -254,19 +257,27 @@ fn validate_hook_for_event(
     extension: &str,
     platform: Platform,
 ) {
+    use std::collections::HashSet;
+
     if let Some(hook_configs) = settings.hooks.get(&event) {
+        let mut validated_wrappers = HashSet::new();
+
         for hook_config in hook_configs {
             for hook in &hook_config.hooks {
                 if hook.command.contains(binary_name) {
                     let wrapper_name = format!("{}.{}", binary_name, extension);
-                    hooks.push(validate_hook(
-                        &wrapper_name,
-                        event_name,
-                        hooks_dir,
-                        binary_name,
-                        platform,
-                    ));
-                    break; // Only validate once per config (see function doc)
+
+                    // Only validate each unique wrapper once (PR feedback - HashSet deduplication)
+                    // insert() returns true if the value was newly inserted (not already present)
+                    if validated_wrappers.insert(wrapper_name.clone()) {
+                        hooks.push(validate_hook(
+                            &wrapper_name,
+                            event_name,
+                            hooks_dir,
+                            binary_name,
+                            platform,
+                        ));
+                    }
                 }
             }
         }
