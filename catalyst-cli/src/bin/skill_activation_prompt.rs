@@ -35,16 +35,34 @@ enum SkillActivationError {
     },
 }
 
+/// Input data from Claude Code's UserPromptSubmit hook
+///
+/// Note: Fields prefixed with underscore are part of the hook's JSON schema
+/// but not currently used by this binary. They're kept in the struct to:
+/// 1. Maintain complete schema compatibility with Claude Code
+/// 2. Enable future features (e.g., session-aware caching, permission checks)
+/// 3. Ensure deserialization succeeds even if Claude Code adds more fields
+///
+/// If these fields are needed in the future, remove the underscore prefix.
 #[derive(Debug, Deserialize)]
 struct HookInput {
+    /// Session ID for the current Claude Code session (reserved for future use)
     #[serde(rename = "session_id")]
     _session_id: String,
+
+    /// Path to the conversation transcript (reserved for future use)
     #[serde(rename = "transcript_path")]
     _transcript_path: String,
+
+    /// Current working directory when the hook was triggered
     #[serde(rename = "cwd")]
     cwd: String,
+
+    /// Permission mode from Claude Code settings (reserved for future use)
     #[serde(rename = "permission_mode")]
     _permission_mode: String,
+
+    /// The user's prompt text to analyze for skill activation
     prompt: String,
 }
 
@@ -100,26 +118,78 @@ impl CompiledTriggers {
     }
 }
 
+/// Priority levels for skill activation (PR feedback - extracted magic strings)
+///
+/// These priority levels determine the order and prominence of skill suggestions
+/// in the activation output. Higher priorities appear first and with more emphasis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Priority {
+    Critical,
+    High,
+    Medium,
+    Low,
+}
+
+impl Priority {
+    /// Parse priority from string (case-insensitive)
+    fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "critical" => Priority::Critical,
+            "high" => Priority::High,
+            "medium" => Priority::Medium,
+            "low" => Priority::Low,
+            _ => {
+                tracing::warn!(
+                    priority = %s,
+                    "Unknown priority level, defaulting to Medium"
+                );
+                Priority::Medium
+            }
+        }
+    }
+
+    /// Convert to string for display (reserved for future use)
+    #[allow(dead_code)]
+    fn as_str(&self) -> &'static str {
+        match self {
+            Priority::Critical => "critical",
+            Priority::High => "high",
+            Priority::Medium => "medium",
+            Priority::Low => "low",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct SkillRule {
     #[serde(rename = "type")]
     r#_type: String,
     #[serde(rename = "enforcement")]
     _enforcement: String,
-    priority: String,
+    #[serde(deserialize_with = "deserialize_priority")]
+    priority: Priority,
     #[serde(rename = "promptTriggers")]
     prompt_triggers: Option<PromptTriggers>,
 }
 
+/// Custom deserializer for Priority enum from string
+fn deserialize_priority<'de, D>(deserializer: D) -> Result<Priority, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(Priority::from_str(&s))
+}
+
 struct CompiledSkillRule {
-    priority: String,
+    priority: Priority,
     compiled_triggers: Option<CompiledTriggers>,
 }
 
 impl CompiledSkillRule {
     fn from_rule(rule: &SkillRule) -> Self {
         Self {
-            priority: rule.priority.clone(),
+            priority: rule.priority,
             compiled_triggers: rule
                 .prompt_triggers
                 .as_ref()
@@ -164,7 +234,7 @@ fn map_file_read_error(path: PathBuf, error: io::Error) -> SkillActivationError 
 struct MatchedSkill {
     name: String,
     _match_type: String,
-    priority: String,
+    priority: Priority,
 }
 
 fn run() -> Result<(), SkillActivationError> {
@@ -203,8 +273,27 @@ fn run() -> Result<(), SkillActivationError> {
     let prompt_lower = prompt.to_lowercase();
 
     // Load skill rules with multi-directory support
-    // Priority: cwd (for /add-dir support) > CLAUDE_PROJECT_DIR > current directory
-    // This enables each directory to have its own skill-rules.json
+    //
+    // Path Resolution Priority (PR feedback - detailed explanation):
+    // 1. cwd/.claude/skills/skill-rules.json (HIGHEST priority)
+    //    - Supports Claude Code's /add-dir command where users work with multiple projects
+    //    - Each directory can have its own skill configuration
+    //    - Example: Main project uses backend skills, added dir uses frontend skills
+    //
+    // 2. $CLAUDE_PROJECT_DIR/.claude/skills/skill-rules.json (MEDIUM priority)
+    //    - Falls back to the primary project directory when set
+    //    - Useful when hooks are invoked from nested directories
+    //    - Ensures consistent skill rules across the main project
+    //
+    // 3. cwd/.claude/skills/skill-rules.json (LOWEST priority, same as #1)
+    //    - If CLAUDE_PROJECT_DIR is not set, uses current directory
+    //    - This is the default behavior for single-directory workflows
+    //
+    // Why this order matters:
+    // - /add-dir workflows: User has catalyst/ and mental-health-bar-rs/ both open
+    // - When in mental-health-bar-rs/, we should use THAT directory's skill rules
+    // - Not the catalyst/ directory's rules, even if CLAUDE_PROJECT_DIR=catalyst
+    // - This enables polyglot workflows (Rust + TypeScript) with appropriate skills per dir
     let rules_path = {
         let cwd_path = PathBuf::from(&data.cwd)
             .join(".claude")
@@ -273,7 +362,7 @@ fn run() -> Result<(), SkillActivationError> {
                 matched_skills.push(MatchedSkill {
                     name: skill_name.clone(),
                     _match_type: "keyword".to_string(),
-                    priority: compiled_rule.priority.clone(),
+                    priority: compiled_rule.priority,
                 });
                 continue;
             }
@@ -290,7 +379,7 @@ fn run() -> Result<(), SkillActivationError> {
                 matched_skills.push(MatchedSkill {
                     name: skill_name.clone(),
                     _match_type: "intent".to_string(),
-                    priority: compiled_rule.priority.clone(),
+                    priority: compiled_rule.priority,
                 });
             }
         }
@@ -302,22 +391,22 @@ fn run() -> Result<(), SkillActivationError> {
         println!("🎯 SKILL ACTIVATION CHECK");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-        // Group by priority
+        // Group by priority (using enum for type safety - PR feedback)
         let critical: Vec<_> = matched_skills
             .iter()
-            .filter(|s| s.priority == "critical")
+            .filter(|s| s.priority == Priority::Critical)
             .collect();
         let high: Vec<_> = matched_skills
             .iter()
-            .filter(|s| s.priority == "high")
+            .filter(|s| s.priority == Priority::High)
             .collect();
         let medium: Vec<_> = matched_skills
             .iter()
-            .filter(|s| s.priority == "medium")
+            .filter(|s| s.priority == Priority::Medium)
             .collect();
         let low: Vec<_> = matched_skills
             .iter()
-            .filter(|s| s.priority == "low")
+            .filter(|s| s.priority == Priority::Low)
             .collect();
 
         if !critical.is_empty() {
@@ -525,35 +614,50 @@ mod tests {
 
     #[test]
     fn test_compiled_skill_rule_creation() {
-        let rule = SkillRule {
-            r#_type: "UserPromptSubmit".to_string(),
-            _enforcement: "suggest".to_string(),
-            priority: "high".to_string(),
-            prompt_triggers: Some(PromptTriggers {
-                keywords: vec!["test".to_string()],
-                intent_patterns: vec![],
-            }),
-        };
+        // Test priority deserialization and compilation
+        let json = r#"{
+            "type": "UserPromptSubmit",
+            "enforcement": "suggest",
+            "priority": "high",
+            "promptTriggers": {
+                "keywords": ["test"],
+                "intentPatterns": []
+            }
+        }"#;
 
+        let rule: SkillRule = serde_json::from_str(json).unwrap();
         let compiled = CompiledSkillRule::from_rule(&rule);
 
-        assert_eq!(compiled.priority, "high");
+        assert_eq!(compiled.priority, Priority::High);
         assert!(compiled.compiled_triggers.is_some());
     }
 
     #[test]
     fn test_compiled_skill_rule_without_triggers() {
-        let rule = SkillRule {
-            r#_type: "UserPromptSubmit".to_string(),
-            _enforcement: "suggest".to_string(),
-            priority: "medium".to_string(),
-            prompt_triggers: None,
-        };
+        let json = r#"{
+            "type": "UserPromptSubmit",
+            "enforcement": "suggest",
+            "priority": "medium"
+        }"#;
 
+        let rule: SkillRule = serde_json::from_str(json).unwrap();
         let compiled = CompiledSkillRule::from_rule(&rule);
 
-        assert_eq!(compiled.priority, "medium");
+        assert_eq!(compiled.priority, Priority::Medium);
         assert!(compiled.compiled_triggers.is_none());
+    }
+
+    #[test]
+    fn test_priority_enum_parsing() {
+        // Test case-insensitive priority parsing
+        assert_eq!(Priority::from_str("critical"), Priority::Critical);
+        assert_eq!(Priority::from_str("CRITICAL"), Priority::Critical);
+        assert_eq!(Priority::from_str("High"), Priority::High);
+        assert_eq!(Priority::from_str("high"), Priority::High);
+        assert_eq!(Priority::from_str("medium"), Priority::Medium);
+        assert_eq!(Priority::from_str("low"), Priority::Low);
+        // Unknown priority defaults to Medium
+        assert_eq!(Priority::from_str("unknown"), Priority::Medium);
     }
 
     #[test]

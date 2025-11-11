@@ -194,55 +194,83 @@ fn validate_hooks(
     let hooks_dir = target_dir.join(HOOKS_DIR);
     let extension = platform.hook_extension();
 
+    // PR feedback: Extracted common validation logic to reduce duplication
     // Check UserPromptSubmit hook (skill-activation-prompt)
-    // Note: We validate only the first matching hook per config to avoid duplicates.
-    // This is intentional - if multiple hooks reference the same binary, we only
-    // validate the wrapper once since they all share the same wrapper script.
-    if let Some(user_prompt_hooks) = settings
-        .hooks
-        .get(&catalyst_core::settings::HookEvent::UserPromptSubmit)
-    {
-        for hook_config in user_prompt_hooks {
-            for hook in &hook_config.hooks {
-                if hook.command.contains("skill-activation-prompt") {
-                    let wrapper_name = format!("skill-activation-prompt.{}", extension);
-                    hooks.push(validate_hook(
-                        &wrapper_name,
-                        "UserPromptSubmit",
-                        &hooks_dir,
-                        "skill-activation-prompt",
-                        platform,
-                    ));
-                    break; // Only validate once per hook config
-                }
-            }
-        }
-    }
+    validate_hook_for_event(
+        &settings,
+        &mut hooks,
+        catalyst_core::settings::HookEvent::UserPromptSubmit,
+        "UserPromptSubmit",
+        "skill-activation-prompt",
+        &hooks_dir,
+        extension,
+        platform,
+    );
 
     // Check PostToolUse hook (file-change-tracker)
-    // Note: Same logic as above - validate wrapper once per config
-    if let Some(post_tool_hooks) = settings
-        .hooks
-        .get(&catalyst_core::settings::HookEvent::PostToolUse)
-    {
-        for hook_config in post_tool_hooks {
+    validate_hook_for_event(
+        &settings,
+        &mut hooks,
+        catalyst_core::settings::HookEvent::PostToolUse,
+        "PostToolUse",
+        "file-change-tracker",
+        &hooks_dir,
+        extension,
+        platform,
+    );
+
+    Ok((hooks, None))
+}
+
+/// Helper function to validate hooks for a specific event (PR feedback - extracted duplication)
+///
+/// This function encapsulates the common pattern of:
+/// 1. Checking if hooks are configured for a specific event
+/// 2. Searching for hooks that reference a specific binary
+/// 3. Validating the wrapper script once per config
+///
+/// # Why we validate only once per config
+///
+/// Settings.json can have multiple hook commands in a single HookConfig:
+/// ```json
+/// "UserPromptSubmit": [{
+///   "hooks": [
+///     {"type": "command", "command": "skill-activation-prompt.sh"},
+///     {"type": "command", "command": "another-hook.sh"}
+///   ]
+/// }]
+/// ```
+///
+/// Multiple hooks might reference the same wrapper script. We only need to validate
+/// the wrapper exists once, not for each reference. The `break` statement ensures this.
+#[allow(clippy::too_many_arguments)]
+fn validate_hook_for_event(
+    settings: &catalyst_core::settings::ClaudeSettings,
+    hooks: &mut Vec<HookStatus>,
+    event: catalyst_core::settings::HookEvent,
+    event_name: &str,
+    binary_name: &str,
+    hooks_dir: &std::path::Path,
+    extension: &str,
+    platform: Platform,
+) {
+    if let Some(hook_configs) = settings.hooks.get(&event) {
+        for hook_config in hook_configs {
             for hook in &hook_config.hooks {
-                if hook.command.contains("file-change-tracker") {
-                    let wrapper_name = format!("file-change-tracker.{}", extension);
+                if hook.command.contains(binary_name) {
+                    let wrapper_name = format!("{}.{}", binary_name, extension);
                     hooks.push(validate_hook(
                         &wrapper_name,
-                        "PostToolUse",
-                        &hooks_dir,
-                        "file-change-tracker",
+                        event_name,
+                        hooks_dir,
+                        binary_name,
                         platform,
                     ));
-                    break; // Only validate once per hook config
+                    break; // Only validate once per config (see function doc)
                 }
             }
         }
     }
-
-    Ok((hooks, None))
 }
 
 /// Validate a single hook wrapper
@@ -769,5 +797,150 @@ mod tests {
 
         let result = fix_hook_wrapper(temp_dir.path(), "test/../etc/passwd.sh", Platform::Linux);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_installation_integration() {
+        // PR feedback: Integration test for complete validation flow
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create directory structure
+        fs::create_dir_all(target.join(".claude/hooks")).unwrap();
+        fs::create_dir_all(target.join(".claude/skills")).unwrap();
+
+        // Create .catalyst-version file
+        let version = env!("CARGO_PKG_VERSION");
+        fs::write(target.join(".catalyst-version"), version).unwrap();
+
+        // Run validation
+        let result = validate_installation(target, Platform::Linux);
+
+        // Should succeed (binaries may not exist but validation should complete)
+        assert!(result.is_ok());
+        let report = result.unwrap();
+
+        // Version should be OK
+        assert!(matches!(report.version_status, VersionStatus::Ok { .. }));
+
+        // Should determine a status level
+        assert!(matches!(
+            report.level,
+            StatusLevel::Ok | StatusLevel::Warning | StatusLevel::Error
+        ));
+    }
+
+    #[test]
+    fn test_validate_installation_with_invalid_settings() {
+        // PR feedback: Test settings.json parse error reporting
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create directory structure
+        fs::create_dir_all(target.join(".claude/hooks")).unwrap();
+        fs::create_dir_all(target.join(".claude/skills")).unwrap();
+
+        // Create invalid settings.json
+        fs::write(target.join(".claude/settings.json"), "{ invalid json").unwrap();
+
+        // Run validation
+        let result = validate_installation(target, Platform::Linux);
+        assert!(result.is_ok());
+
+        let report = result.unwrap();
+
+        // Should have an error issue about settings.json
+        let has_settings_error = report.issues.iter().any(|issue| {
+            issue.component == "settings.json"
+                && issue.severity == IssueSeverity::Error
+                && issue.description.contains("Failed to parse")
+        });
+        assert!(
+            has_settings_error,
+            "Should report settings.json parse error"
+        );
+
+        // Status should be Error due to settings parse failure
+        assert_eq!(report.level, StatusLevel::Error);
+    }
+
+    #[test]
+    fn test_auto_fix_recreates_wrapper() {
+        // PR feedback: Test auto_fix() successfully recreating wrappers
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create hooks directory
+        let hooks_dir = target.join(".claude/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+
+        // Create a basic status report with missing hook
+        let mut report = StatusReport::new();
+        report.hooks.push(HookStatus {
+            name: "skill-activation-prompt.sh".to_string(),
+            exists: false,
+            executable: false,
+            configured: true,
+            event: Some("UserPromptSubmit".to_string()),
+            path: Some(hooks_dir.join("skill-activation-prompt.sh")),
+            calls_correct_binary: false,
+        });
+
+        // Run auto_fix
+        let result = auto_fix(target, Platform::Linux, &report);
+        assert!(result.is_ok());
+
+        let fixed = result.unwrap();
+        // Should fix the wrapper (exists: false triggers recreation)
+        assert!(!fixed.is_empty());
+        assert!(fixed.iter().any(|f| f.contains("skill-activation-prompt")));
+
+        // Verify wrapper was created
+        let wrapper_path = hooks_dir.join("skill-activation-prompt.sh");
+        assert!(wrapper_path.exists());
+
+        // Verify it's executable on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&wrapper_path).unwrap();
+            let permissions = metadata.permissions();
+            assert_ne!(
+                permissions.mode() & 0o111,
+                0,
+                "Wrapper should be executable"
+            );
+        }
+
+        // Verify content is valid
+        let content = fs::read_to_string(&wrapper_path).unwrap();
+        assert!(content.contains("skill-activation-prompt"));
+        assert!(content.contains(".claude-hooks/bin"));
+    }
+
+    #[test]
+    fn test_auto_fix_version_file() {
+        // PR feedback: Test auto_fix() creating version file
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create status report with missing version
+        let mut report = StatusReport::new();
+        report.version_status = VersionStatus::Missing;
+
+        // Run auto_fix
+        let result = auto_fix(target, Platform::Linux, &report);
+        assert!(result.is_ok());
+
+        let fixed = result.unwrap();
+        assert_eq!(fixed.len(), 1);
+        assert!(fixed[0].contains(".catalyst-version"));
+
+        // Verify version file was created
+        let version_path = target.join(".catalyst-version");
+        assert!(version_path.exists());
+
+        let content = fs::read_to_string(&version_path).unwrap();
+        assert_eq!(content.trim(), env!("CARGO_PKG_VERSION"));
     }
 }
