@@ -33,7 +33,8 @@ pub fn validate_installation(target_dir: &Path, platform: Platform) -> Result<St
     report.binaries = validate_binaries(platform)?;
 
     // Task 4.3: Validate hooks
-    report.hooks = validate_hooks(target_dir, platform)?;
+    let (hooks, settings_parse_error) = validate_hooks(target_dir, platform)?;
+    report.hooks = hooks;
 
     // Task 4.4: Validate skills
     report.skills = validate_skills(target_dir)?;
@@ -42,7 +43,7 @@ pub fn validate_installation(target_dir: &Path, platform: Platform) -> Result<St
     report.version_status = check_version(target_dir)?;
 
     // Collect issues based on validation results
-    collect_issues(&mut report);
+    collect_issues(&mut report, settings_parse_error);
 
     // Determine overall status level
     report.level = determine_status_level(&report);
@@ -151,14 +152,22 @@ fn validate_binary(
 ///
 /// * `target_dir` - Base directory containing .claude/
 /// * `platform` - Current platform (for wrapper extension)
-fn validate_hooks(target_dir: &Path, platform: Platform) -> Result<Vec<HookStatus>> {
+///
+/// # Returns
+///
+/// Returns (hooks, parse_error) tuple where parse_error is Some if settings.json
+/// couldn't be parsed, allowing the caller to add it to the issues list.
+fn validate_hooks(
+    target_dir: &Path,
+    platform: Platform,
+) -> Result<(Vec<HookStatus>, Option<String>)> {
     let mut hooks = Vec::new();
 
     // Check if settings.json exists
     let settings_path = target_dir.join(SETTINGS_FILE);
     if !settings_path.exists() {
-        // No settings.json - report empty hooks with issue
-        return Ok(hooks);
+        // No settings.json - report empty hooks (no error, just not configured)
+        return Ok((hooks, None));
     }
 
     // Parse settings.json
@@ -171,9 +180,13 @@ fn validate_hooks(target_dir: &Path, platform: Platform) -> Result<Vec<HookStatu
 
     let settings = match ClaudeSettings::read(settings_path_str) {
         Ok(s) => s,
-        Err(_) => {
-            // Invalid settings.json - report with issue
-            return Ok(hooks);
+        Err(e) => {
+            // Invalid settings.json - return error details for issue reporting
+            let error_msg = format!(
+                "Failed to parse settings.json: {}. Check for invalid JSON, missing fields, or incorrect structure.",
+                e
+            );
+            return Ok((hooks, Some(error_msg)));
         }
     };
 
@@ -181,51 +194,94 @@ fn validate_hooks(target_dir: &Path, platform: Platform) -> Result<Vec<HookStatu
     let hooks_dir = target_dir.join(HOOKS_DIR);
     let extension = platform.hook_extension();
 
+    // PR feedback: Extracted common validation logic to reduce duplication
     // Check UserPromptSubmit hook (skill-activation-prompt)
-    if let Some(user_prompt_hooks) = settings
-        .hooks
-        .get(&catalyst_core::settings::HookEvent::UserPromptSubmit)
-    {
-        for hook_config in user_prompt_hooks {
-            for hook in &hook_config.hooks {
-                if hook.command.contains("skill-activation-prompt") {
-                    let wrapper_name = format!("skill-activation-prompt.{}", extension);
-                    hooks.push(validate_hook(
-                        &wrapper_name,
-                        "UserPromptSubmit",
-                        &hooks_dir,
-                        "skill-activation-prompt",
-                        platform,
-                    ));
-                    break; // Only check once per hook config
-                }
-            }
-        }
-    }
+    validate_hook_for_event(
+        &settings,
+        &mut hooks,
+        catalyst_core::settings::HookEvent::UserPromptSubmit,
+        "UserPromptSubmit",
+        "skill-activation-prompt",
+        &hooks_dir,
+        extension,
+        platform,
+    );
 
     // Check PostToolUse hook (file-change-tracker)
-    if let Some(post_tool_hooks) = settings
-        .hooks
-        .get(&catalyst_core::settings::HookEvent::PostToolUse)
-    {
-        for hook_config in post_tool_hooks {
+    validate_hook_for_event(
+        &settings,
+        &mut hooks,
+        catalyst_core::settings::HookEvent::PostToolUse,
+        "PostToolUse",
+        "file-change-tracker",
+        &hooks_dir,
+        extension,
+        platform,
+    );
+
+    Ok((hooks, None))
+}
+
+/// Helper function to validate hooks for a specific event (PR feedback - extracted duplication)
+///
+/// This function encapsulates the common pattern of:
+/// 1. Checking if hooks are configured for a specific event
+/// 2. Searching for hooks that reference a specific binary
+/// 3. Validating each unique wrapper script exactly once
+///
+/// # Deduplication Strategy (PR feedback - validate all hooks, deduplicate wrappers)
+///
+/// Settings.json can have multiple hook commands in a single HookConfig:
+/// ```json
+/// "UserPromptSubmit": [{
+///   "hooks": [
+///     {"type": "command", "command": "skill-activation-prompt.sh"},
+///     {"type": "command", "command": "another-hook.sh"}
+///   ]
+/// }]
+/// ```
+///
+/// Multiple hooks might reference the same wrapper script. We validate all matching hooks
+/// but track which unique wrappers we've already validated using a HashSet. This ensures:
+/// - All hooks are checked (no early break)
+/// - Each unique wrapper is validated only once (deduplication)
+/// - No duplicate entries in the status report
+#[allow(clippy::too_many_arguments)]
+fn validate_hook_for_event(
+    settings: &catalyst_core::settings::ClaudeSettings,
+    hooks: &mut Vec<HookStatus>,
+    event: catalyst_core::settings::HookEvent,
+    event_name: &str,
+    binary_name: &str,
+    hooks_dir: &std::path::Path,
+    extension: &str,
+    platform: Platform,
+) {
+    use std::collections::HashSet;
+
+    if let Some(hook_configs) = settings.hooks.get(&event) {
+        let mut validated_wrappers = HashSet::new();
+
+        for hook_config in hook_configs {
             for hook in &hook_config.hooks {
-                if hook.command.contains("file-change-tracker") {
-                    let wrapper_name = format!("file-change-tracker.{}", extension);
-                    hooks.push(validate_hook(
-                        &wrapper_name,
-                        "PostToolUse",
-                        &hooks_dir,
-                        "file-change-tracker",
-                        platform,
-                    ));
-                    break; // Only check once per hook config
+                if hook.command.contains(binary_name) {
+                    let wrapper_name = format!("{}.{}", binary_name, extension);
+
+                    // Only validate each unique wrapper once (PR feedback - HashSet deduplication)
+                    // insert() returns true if the value was newly inserted (not already present)
+                    if validated_wrappers.insert(wrapper_name.clone()) {
+                        hooks.push(validate_hook(
+                            &wrapper_name,
+                            event_name,
+                            hooks_dir,
+                            binary_name,
+                            platform,
+                        ));
+                    }
                 }
             }
         }
     }
-
-    Ok(hooks)
 }
 
 /// Validate a single hook wrapper
@@ -292,6 +348,13 @@ fn validate_hook(
 /// # Arguments
 ///
 /// * `target_dir` - Base directory containing .claude/
+///
+/// # PR #21 Feedback - Comment #3
+///
+/// Previously did a simplified check (just checking if skill-rules.json exists).
+/// Now properly parses the file and verifies each skill directory is listed
+/// in the skills object. This catches configuration drift where skills are
+/// installed but not registered.
 fn validate_skills(target_dir: &Path) -> Result<Vec<SkillStatus>> {
     let mut skills = Vec::new();
 
@@ -300,9 +363,32 @@ fn validate_skills(target_dir: &Path) -> Result<Vec<SkillStatus>> {
         return Ok(skills);
     }
 
-    // Check if skill-rules.json exists
+    // Parse skill-rules.json to get registered skills
     let skill_rules_path = target_dir.join(SKILL_RULES_FILE);
-    let has_skill_rules = skill_rules_path.exists();
+    let registered_skills = if skill_rules_path.exists() {
+        match fs::read_to_string(&skill_rules_path) {
+            Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(json) => {
+                    // Extract skill names from the "skills" object
+                    json.get("skills")
+                        .and_then(|s| s.as_object())
+                        .map(|obj| {
+                            obj.keys()
+                                .map(|k| k.to_string())
+                                .collect::<std::collections::HashSet<_>>()
+                        })
+                        .unwrap_or_default()
+                }
+                Err(_) => {
+                    // Invalid JSON - return empty set (will mark all skills as unregistered)
+                    std::collections::HashSet::new()
+                }
+            },
+            Err(_) => std::collections::HashSet::new(),
+        }
+    } else {
+        std::collections::HashSet::new()
+    };
 
     // Read installed skills from directory
     let entries = match fs::read_dir(&skills_dir) {
@@ -325,13 +411,14 @@ fn validate_skills(target_dir: &Path) -> Result<Vec<SkillStatus>> {
             }
 
             let has_main_file = path.join("SKILL.md").exists();
+            let is_registered = registered_skills.contains(&skill_name);
 
             skills.push(SkillStatus {
                 name: skill_name,
                 exists: true,
                 has_main_file,
-                registered: has_skill_rules, // Simplified check
-                current_hash: None,          // Not computed during validation
+                registered: is_registered,
+                current_hash: None, // Not computed during validation
                 expected_hash: None,
                 modified: false,
                 path: Some(path),
@@ -369,7 +456,25 @@ fn check_version(target_dir: &Path) -> Result<VersionStatus> {
 }
 
 /// Collect issues from validation results
-fn collect_issues(report: &mut StatusReport) {
+///
+/// # Arguments
+///
+/// * `report` - Status report to add issues to
+/// * `settings_parse_error` - Optional error from parsing settings.json
+fn collect_issues(report: &mut StatusReport, settings_parse_error: Option<String>) {
+    // Check for settings.json parse errors (PR #21 feedback - comment #2)
+    if let Some(error_msg) = settings_parse_error {
+        report.issues.push(Issue {
+            severity: IssueSeverity::Error,
+            component: "settings.json".to_string(),
+            description: error_msg,
+            auto_fixable: false,
+            suggested_fix: Some(
+                "Fix settings.json manually or run: catalyst init --force".to_string(),
+            ),
+        });
+    }
+
     // Check for missing binaries
     for binary in &report.binaries {
         if !binary.exists {
@@ -429,6 +534,22 @@ fn collect_issues(report: &mut StatusReport) {
                 description: format!("Skill '{}' is missing SKILL.md", skill.name),
                 auto_fixable: false,
                 suggested_fix: Some("Reinstall skill: catalyst init --force".to_string()),
+            });
+        }
+
+        // PR #21 Feedback - Comment #3: Report unregistered skills
+        if !skill.registered {
+            report.issues.push(Issue {
+                severity: IssueSeverity::Warning,
+                component: format!("{} skill", skill.name),
+                description: format!(
+                    "Skill '{}' directory exists but is not registered in skill-rules.json",
+                    skill.name
+                ),
+                auto_fixable: false,
+                suggested_fix: Some(
+                    "Add skill to skill-rules.json manually or run: catalyst update".to_string(),
+                ),
             });
         }
     }
@@ -687,5 +808,150 @@ mod tests {
 
         let result = fix_hook_wrapper(temp_dir.path(), "test/../etc/passwd.sh", Platform::Linux);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_installation_integration() {
+        // PR feedback: Integration test for complete validation flow
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create directory structure
+        fs::create_dir_all(target.join(".claude/hooks")).unwrap();
+        fs::create_dir_all(target.join(".claude/skills")).unwrap();
+
+        // Create .catalyst-version file
+        let version = env!("CARGO_PKG_VERSION");
+        fs::write(target.join(".catalyst-version"), version).unwrap();
+
+        // Run validation
+        let result = validate_installation(target, Platform::Linux);
+
+        // Should succeed (binaries may not exist but validation should complete)
+        assert!(result.is_ok());
+        let report = result.unwrap();
+
+        // Version should be OK
+        assert!(matches!(report.version_status, VersionStatus::Ok { .. }));
+
+        // Should determine a status level
+        assert!(matches!(
+            report.level,
+            StatusLevel::Ok | StatusLevel::Warning | StatusLevel::Error
+        ));
+    }
+
+    #[test]
+    fn test_validate_installation_with_invalid_settings() {
+        // PR feedback: Test settings.json parse error reporting
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create directory structure
+        fs::create_dir_all(target.join(".claude/hooks")).unwrap();
+        fs::create_dir_all(target.join(".claude/skills")).unwrap();
+
+        // Create invalid settings.json
+        fs::write(target.join(".claude/settings.json"), "{ invalid json").unwrap();
+
+        // Run validation
+        let result = validate_installation(target, Platform::Linux);
+        assert!(result.is_ok());
+
+        let report = result.unwrap();
+
+        // Should have an error issue about settings.json
+        let has_settings_error = report.issues.iter().any(|issue| {
+            issue.component == "settings.json"
+                && issue.severity == IssueSeverity::Error
+                && issue.description.contains("Failed to parse")
+        });
+        assert!(
+            has_settings_error,
+            "Should report settings.json parse error"
+        );
+
+        // Status should be Error due to settings parse failure
+        assert_eq!(report.level, StatusLevel::Error);
+    }
+
+    #[test]
+    fn test_auto_fix_recreates_wrapper() {
+        // PR feedback: Test auto_fix() successfully recreating wrappers
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create hooks directory
+        let hooks_dir = target.join(".claude/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+
+        // Create a basic status report with missing hook
+        let mut report = StatusReport::new();
+        report.hooks.push(HookStatus {
+            name: "skill-activation-prompt.sh".to_string(),
+            exists: false,
+            executable: false,
+            configured: true,
+            event: Some("UserPromptSubmit".to_string()),
+            path: Some(hooks_dir.join("skill-activation-prompt.sh")),
+            calls_correct_binary: false,
+        });
+
+        // Run auto_fix
+        let result = auto_fix(target, Platform::Linux, &report);
+        assert!(result.is_ok());
+
+        let fixed = result.unwrap();
+        // Should fix the wrapper (exists: false triggers recreation)
+        assert!(!fixed.is_empty());
+        assert!(fixed.iter().any(|f| f.contains("skill-activation-prompt")));
+
+        // Verify wrapper was created
+        let wrapper_path = hooks_dir.join("skill-activation-prompt.sh");
+        assert!(wrapper_path.exists());
+
+        // Verify it's executable on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&wrapper_path).unwrap();
+            let permissions = metadata.permissions();
+            assert_ne!(
+                permissions.mode() & 0o111,
+                0,
+                "Wrapper should be executable"
+            );
+        }
+
+        // Verify content is valid
+        let content = fs::read_to_string(&wrapper_path).unwrap();
+        assert!(content.contains("skill-activation-prompt"));
+        assert!(content.contains(".claude-hooks/bin"));
+    }
+
+    #[test]
+    fn test_auto_fix_version_file() {
+        // PR feedback: Test auto_fix() creating version file
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path();
+
+        // Create status report with missing version
+        let mut report = StatusReport::new();
+        report.version_status = VersionStatus::Missing;
+
+        // Run auto_fix
+        let result = auto_fix(target, Platform::Linux, &report);
+        assert!(result.is_ok());
+
+        let fixed = result.unwrap();
+        assert_eq!(fixed.len(), 1);
+        assert!(fixed[0].contains(".catalyst-version"));
+
+        // Verify version file was created
+        let version_path = target.join(".catalyst-version");
+        assert!(version_path.exists());
+
+        let content = fs::read_to_string(&version_path).unwrap();
+        assert_eq!(content.trim(), env!("CARGO_PKG_VERSION"));
     }
 }
