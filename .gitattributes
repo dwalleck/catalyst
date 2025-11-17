@@ -38,3 +38,6 @@ Cargo.lock text eol=lf
 *.db binary
 *.sqlite binary
 *.sqlite3 binary
+
+# Use bd merge for beads JSONL files
+.beads/beads.jsonl merge=beads
